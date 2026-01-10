@@ -25,13 +25,16 @@ _BINANCE_LAST_REQUEST_TIME = 0
 _BINANCE_RATE_LOCK = threading.Lock()
 _BINANCE_MIN_INTERVAL = 0.1
 
-_USDC_CACHE = {"cặp": [], "cập_nhật_cuối": 0}
-_USDC_CACHE_TTL = 30
+# Đổi tên biến cache
+_USDT_CACHE = {"cặp": [], "cập_nhật_cuối": 0}
+_USDT_CACHE_TTL = 30
+
+# Blacklist USDT
+_SYMBOL_BLACKLIST = {'BTCUSDT', 'ETHUSDT'}
 
 _LEVERAGE_CACHE = {"dữ_liệu": {}, "cập_nhật_cuối": 0}
 _LEVERAGE_CACHE_TTL = 3600
 
-_SYMBOL_BLACKLIST = {'BTCUSDC', 'ETHUSDC'}
 
 # ========== HÀM TIỆN ÍCH ==========
 def setup_logging():
@@ -140,33 +143,32 @@ def binance_api_request(url, method='GET', params=None, headers=None):
     logger.error(f"Thất bại yêu cầu API sau {max_retries} lần thử")
     return None
 
-def get_all_usdc_pairs(limit=50):
-    global _USDC_CACHE
+def get_all_usdt_pairs(limit=50):
+    global _USDT_CACHE
     try:
         now = time.time()
-        if _USDC_CACHE["cặp"] and (now - _USDC_CACHE["cập_nhật_cuối"] < _USDC_CACHE_TTL):
-            return _USDC_CACHE["cặp"][:limit]
+        if _USDT_CACHE["cặp"] and (now - _USDT_CACHE["cập_nhật_cuối"] < _USDT_CACHE_TTL):
+            return _USDT_CACHE["cặp"][:limit]
 
         url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         data = binance_api_request(url)
         if not data: return []
 
-        usdc_pairs = []
+        usdt_pairs = []
         for symbol_info in data.get('symbols', []):
             symbol = symbol_info.get('symbol', '')
-            if (symbol.endswith('USDC') and symbol_info.get('status') == 'TRADING' 
+            if (symbol.endswith('USDT') and symbol_info.get('status') == 'TRADING' 
                 and symbol not in _SYMBOL_BLACKLIST):
-                usdc_pairs.append(symbol)
+                usdt_pairs.append(symbol)
 
-        _USDC_CACHE["cặp"] = usdc_pairs
-        _USDC_CACHE["cập_nhật_cuối"] = now
-        logger.info(f"✅ Đã lấy {len(usdc_pairs)} cặp USDC (loại trừ BTC/ETH)")
-        return usdc_pairs[:limit]
+        _USDT_CACHE["cặp"] = usdt_pairs
+        _USDT_CACHE["cập_nhật_cuối"] = now
+        logger.info(f"✅ Đã lấy {len(usdt_pairs)} cặp USDT (loại trừ BTC/ETH)")
+        return usdt_pairs[:limit]
 
     except Exception as e:
         logger.error(f"❌ Lỗi lấy danh sách coin: {str(e)}")
         return []
-
 def get_max_leverage(symbol, api_key, api_secret):
     global _LEVERAGE_CACHE
     try:
@@ -238,9 +240,9 @@ def get_balance(api_key, api_secret):
         if not data: return None
             
         for asset in data['assets']:
-            if asset['asset'] == 'USDC':
+            if asset['asset'] == 'USDT':
                 available_balance = float(asset['availableBalance'])
-                logger.info(f"💰 Số dư - Khả dụng: {available_balance:.2f} USDC")
+                logger.info(f"💰 Số dư - Khả dụng: {available_balance:.2f} USDT")
                 return available_balance
         return 0
     except Exception as e:
@@ -249,9 +251,9 @@ def get_balance(api_key, api_secret):
 
 def get_total_and_available_balance(api_key, api_secret):
     """
-    Lấy TỔNG số dư (USDT + USDC) và số dư KHẢ DỤNG tương ứng.
-    total_all   = tổng walletBalance (USDT+USDC)
-    avail_all   = tổng availableBalance (USDT+USDC)
+    Lấy TỔNG số dư (USDT) và số dư KHẢ DỤNG tương ứng.
+    total_all   = tổng walletBalance (USDT)
+    avail_all   = tổng availableBalance (USDT)
     """
     try:
         ts = int(time.time() * 1000)
@@ -270,12 +272,12 @@ def get_total_and_available_balance(api_key, api_secret):
         available_all = 0.0
 
         for asset in data["assets"]:
-            if asset["asset"] in ("USDT", "USDC"):
+            if asset["asset"] == "USDT":
                 available_all += float(asset["availableBalance"])
                 total_all += float(asset["walletBalance"])
 
         logger.info(
-            f"💰 Tổng số dư (USDT+USDC): {total_all:.2f}, "
+            f"💰 Tổng số dư (USDT): {total_all:.2f}, "
             f"Khả dụng: {available_all:.2f}"
         )
         return total_all, available_all
@@ -1987,6 +1989,7 @@ class BalanceProtectionBot(BaseBot):
                  api_key, api_secret, telegram_bot_token, telegram_chat_id, bot_id=None, **kwargs):
         
         # Trích xuất các tham số cụ thể từ kwargs
+        dynamic_strategy = kwargs.pop('dynamic_strategy', 'volatility')
         max_coins = kwargs.pop('max_coins', 1)
         pyramiding_n = kwargs.pop('pyramiding_n', 0)
         pyramiding_x = kwargs.pop('pyramiding_x', 0)
@@ -1995,19 +1998,19 @@ class BalanceProtectionBot(BaseBot):
         super().__init__(symbol, lev, percent, tp, sl, roi_trigger, ws_manager,
                          api_key, api_secret, telegram_bot_token, telegram_chat_id,
                          "Bot-Biến-Động", bot_id=bot_id, 
-                         dynamic_strategy="volatility",
+                         dynamic_strategy=dynamic_strategy,
                          max_coins=max_coins,
                          pyramiding_n=pyramiding_n,
                          pyramiding_x=pyramiding_x,
                          reverse_on_stop=reverse_on_stop,
                          **kwargs)
-
 class CompoundProfitBot(BaseBot):
     """Bot lãi kép - Chiến lược khối lượng"""
     def __init__(self, symbol, lev, percent, tp, sl, roi_trigger, ws_manager,
                  api_key, api_secret, telegram_bot_token, telegram_chat_id, bot_id=None, **kwargs):
         
         # Trích xuất các tham số cụ thể từ kwargs
+        dynamic_strategy = kwargs.pop('dynamic_strategy', 'volume')
         max_coins = kwargs.pop('max_coins', 1)
         pyramiding_n = kwargs.pop('pyramiding_n', 0)
         pyramiding_x = kwargs.pop('pyramiding_x', 0)
@@ -2016,13 +2019,12 @@ class CompoundProfitBot(BaseBot):
         super().__init__(symbol, lev, percent, tp, sl, roi_trigger, ws_manager,
                          api_key, api_secret, telegram_bot_token, telegram_chat_id,
                          "Bot-Khối-Lượng", bot_id=bot_id, 
-                         dynamic_strategy="volume",
+                         dynamic_strategy=dynamic_strategy,
                          max_coins=max_coins,
                          pyramiding_n=pyramiding_n,
                          pyramiding_x=pyramiding_x,
                          reverse_on_stop=reverse_on_stop,
                          **kwargs)
-
 class StaticMarketBot(BaseBot):
     """Bot tĩnh - Coin cố định"""
     def __init__(self, symbol, lev, percent, tp, sl, roi_trigger, ws_manager,
@@ -2044,7 +2046,6 @@ class StaticMarketBot(BaseBot):
                          pyramiding_x=pyramiding_x,
                          reverse_on_stop=reverse_on_stop,
                          **kwargs)
-
 # ========== HÀM TẠO BÀN PHÍM ==========
 def create_main_menu():
     return {
@@ -2107,9 +2108,9 @@ def create_max_coins_keyboard():
 
 def create_symbols_keyboard():
     try:
-        symbols = get_all_usdc_pairs(limit=12) or ["BNBUSDC", "ADAUSDC", "DOGEUSDC", "XRPUSDC", "DOTUSDC", "LINKUSDC", "SOLUSDC", "MATICUSDC"]
+        symbols = get_all_usdt_pairs(limit=12) or ["BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT", "SOLUSDT", "MATICUSDT"]
     except:
-        symbols = ["BNBUSDC", "ADAUSDC", "DOGEUSDC", "XRPUSDC", "DOTUSDC", "LINKUSDC", "SOLUSDC", "MATICUSDC"]
+        symbols = ["BNBUSDT", "ADAUSDT", "DOGEUSDT", "XRPUSDT", "DOTUSDT", "LINKUSDT", "SOLUSDT", "MATICUSDT"]
     
     keyboard = []
     row = []
