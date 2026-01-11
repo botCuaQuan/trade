@@ -23,7 +23,7 @@ import ssl
 # ========== CẤU HÌNH & HẰNG SỐ ==========
 _BINANCE_LAST_REQUEST_TIME = 0
 _BINANCE_RATE_LOCK = threading.Lock()
-_BINANCE_MIN_INTERVAL = 0.1
+_BINANCE_MIN_INTERVAL = 1
 
 # Đổi tên biến cache
 _USDT_CACHE = {"cặp": [], "cập_nhật_cuối": 0}
