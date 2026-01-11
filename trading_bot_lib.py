@@ -2438,10 +2438,13 @@ class BotManager:
                     symbol, lev, percent, tp, sl, roi_trigger, self.ws_manager,
                     self.api_key, self.api_secret, self.telegram_bot_token, self.telegram_chat_id,
                     coin_manager=self.coin_manager, symbol_locks=self.symbol_locks,
-                    bot_coordinator=self.bot_coordinator, bot_id=bot_id, max_coins=1,
-                    pyramiding_n=pyramiding_n, pyramiding_x=pyramiding_x,
-                    **bot_params
+                    bot_coordinator=self.bot_coordinator, bot_id=bot_id,
+                    pyramiding_n=pyramiding_n,
+                    pyramiding_x=pyramiding_x,
+                    **bot_params      # max_coins CHỈ đi ở đây
                 )
+
+                
                 
                 bot._bot_manager = self
                 self.bots[bot_id] = bot
