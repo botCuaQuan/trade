@@ -460,7 +460,7 @@ def get_high_volatility_symbols(limit=20, timeframe="5m", lookback=20):
                     volatility = np.std(price_changes)
                     volatility_data.append((symbol, volatility))
                     
-                time.sleep(0.1)  # Tránh rate limit
+                time.sleep(0.5)  # Tránh rate limit
                 
             except Exception as e:
                 continue
@@ -813,7 +813,7 @@ class SmartCoinFinder:
                 if max_lev < required_leverage: 
                     continue
 
-                time.sleep(0.1)  # Tránh rate limit
+                time.sleep(0.5)  # Tránh rate limit
                 entry_signal = self.get_entry_signal(symbol)
                 if entry_signal in ["BUY", "SELL"]:
                     valid_symbols.append((symbol, entry_signal))
@@ -864,7 +864,7 @@ class WebSocketManager:
                     current_time = time.time()
                     
                     if (symbol in self.last_price_update and 
-                        current_time - self.last_price_update[symbol] < 0.1):
+                        current_time - self.last_price_update[symbol] < 0.5):
                         return
                     
                     self.last_price_update[symbol] = current_time
@@ -974,7 +974,7 @@ class BaseBot:
         self.margin_safety_interval = 10
         self.last_margin_safety_check = 0
 
-        self.volume_imbalance_threshold = 0.1
+        self.volume_imbalance_threshold = 0.5
 
         self.coin_manager = coin_manager or CoinManager()
         self.symbol_locks = symbol_locks
@@ -2609,7 +2609,7 @@ class BotManager:
                                 last_update_id = update_id
                                 self._handle_telegram_message(chat_id, text)
                 
-                time.sleep(0.1)
+                time.sleep(0.5)
                 
             except Exception as e:
                 logger.error(f"Lỗi nghe Telegram: {str(e)}")
@@ -2766,7 +2766,7 @@ class BotManager:
                 try:
                     percent = float(text)
                     if percent <= 0 or percent > 100:
-                        send_telegram("⚠️ % số dư phải từ 0.1-100. Vui lòng chọn:",
+                        send_telegram("⚠️ % số dư phải từ 0.5-100. Vui lòng chọn:",
                                     chat_id=chat_id, reply_markup=create_percent_keyboard(),
                                     bot_token=self.telegram_bot_token, default_chat_id=self.telegram_chat_id)
                         return
