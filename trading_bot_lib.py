@@ -1,4 +1,4 @@
-# trading_bot_lib_complete.py - PHẦN 1
+# trading_bot_lib_complete.py - PHẦN 1 (ĐÃ SỬA LỖI)
 import json
 import hmac
 import hashlib
@@ -309,9 +309,7 @@ def get_margin_safety_info(api_key, api_secret):
         maint_margin = float(data.get("totalMaintMargin", 0.0))
 
         if maint_margin <= 0:
-            logger.warning(
-                f"⚠️ Maint margin <= 0 (margin_balance={margin_balance:.4f}, maint_margin={maint_margin:.4f})"
-            )
+            # Không có vị thế, maint_margin = 0 là bình thường
             return margin_balance, maint_margin, None
 
         ratio = margin_balance / maint_margin
@@ -596,15 +594,18 @@ class SmartCoinFinder:
         return get_max_leverage(symbol, self.api_key, self.api_secret)
     
     def calculate_rsi(self, prices, period=14):
-        if len(prices) < period + 1: return 50
+        if len(prices) < period + 1: 
+            return 50
         deltas = np.diff(prices)
         gains = np.where(deltas > 0, deltas, 0)
         losses = np.where(deltas < 0, -deltas, 0)
         
         avg_gains = np.mean(gains[:period])
         avg_losses = np.mean(losses[:period])
-        if avg_losses == 0: return 100
-            
+        
+        if avg_losses == 0:
+            return 100  # Nếu không có lỗ, RSI = 100
+        
         rs = avg_gains / avg_losses
         return 100 - (100 / (1 + rs))
     
@@ -634,8 +635,16 @@ class SmartCoinFinder:
             price_change_prev = prev_close - prev_prev_close
             price_change_current = current_close - prev_close
             
-            volume_change_prev = (prev_volume - prev_prev_volume) / prev_prev_volume * 100
-            volume_change_current = (current_volume - prev_volume) / prev_volume * 100
+            # SỬA LỖI: Kiểm tra chia cho 0 khi tính volume change
+            if prev_prev_volume == 0:
+                volume_change_prev = 0
+            else:
+                volume_change_prev = (prev_volume - prev_prev_volume) / prev_prev_volume * 100
+            
+            if prev_volume == 0:
+                volume_change_current = 0
+            else:
+                volume_change_current = (current_volume - prev_volume) / prev_volume * 100
             
             price_increasing = price_change_current > 0
             price_decreasing = price_change_current < 0
@@ -2479,7 +2488,7 @@ class BotManager:
             
             success_msg += (f"\n🔄 <b>HỆ THỐNG HÀNG ĐỢI ĐƯỢC KÍCH HOẠT</b>\n"
                           f"• Bot đầu tiên trong hàng đợi tìm coin trước\n"
-                          f"• Bot vào lệnh → bot tiếp theo tìm NGAY LẬP TỨC\n"
+                          f"• Bot vào lệnh → bot tiếp theo tìm NGAY LẬP TÚC\n"
                           f"• Bot có coin không thể vào hàng đợi\n"
                           f"• Bot đóng lệnh có thể vào lại hàng đợi\n\n")
             
