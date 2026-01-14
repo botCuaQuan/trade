@@ -629,12 +629,6 @@ def get_margin_safety_info(api_key, api_secret):
         margin_balance = float(data.get("totalMarginBalance", 0.0))
         maint_margin = float(data.get("totalMaintMargin", 0.0))
 
-        if maint_margin <= 0:
-            logger.warning(
-                f"⚠️ Maint margin <= 0 (margin_balance={margin_balance:.4f}, maint_margin={maint_margin:.4f})"
-            )
-            return margin_balance, maint_margin, None
-
         ratio = margin_balance / maint_margin
 
         logger.info(
@@ -2014,7 +2008,7 @@ class BaseBot:
                 qty = math.floor(qty / step_size) * step_size
                 qty = round(qty, 8)
 
-            if qty <= 0 or qty < step_size:
+            if qty < 0 or qty <= step_size:
                 self.log(f"❌ {symbol} - Khối lượng không hợp lệ")
                 self.stop_symbol(symbol)
                 return False
@@ -3670,18 +3664,35 @@ class BotManager:
                         return
 
                     user_state["percent"] = percent
+
+                    # ✅ Nếu là bot động + combined và đã có TP/SL mua-bán -> bỏ qua TP/SL chung
+                    if user_state.get("bot_mode") == "dynamic" and user_state.get("dynamic_strategy") == "combined":
+                        if all(k in user_state for k in ("tp_buy", "sl_buy", "tp_sell", "sl_sell")):
+                            # gán tp/sl chung để BotManager.add_bot vẫn nhận đủ tham số
+                            user_state["tp"] = user_state["tp_buy"]
+                            user_state["sl"] = user_state["sl_buy"]
+                            user_state["step"] = "waiting_pyramiding_n"
+                    
+                            send_telegram(
+                                f"📊 % Số dư: {percent}%\n✅ Đã có TP/SL Mua-Bán, bỏ qua TP/SL chung.\n\n"
+                                "Nhập số lần nhồi lệnh (0 để tắt):",
+                                chat_id=chat_id,
+                                reply_markup=create_pyramiding_n_keyboard(),
+                                bot_token=self.telegram_bot_token,
+                                default_chat_id=self.telegram_chat_id,
+                            )
+                            return
+                    
+                    # 🔁 Còn lại giữ flow cũ cho volume/volatility và bot tĩnh
                     user_state["step"] = "waiting_tp"
-
-                    balance = get_balance(self.api_key, self.api_secret)
-                    actual_amount = balance * (percent / 100) if balance else 0
-
                     send_telegram(
-                        f"📊 % Số dư: {percent}%\n💵 Số tiền mỗi lệnh: ~{actual_amount:.2f} USDC\n\nChọn Take Profit (%):",
+                        f"📊 % Số dư: {percent}%\n\nChọn Take Profit (%):",
                         chat_id=chat_id,
                         reply_markup=create_tp_keyboard(),
                         bot_token=self.telegram_bot_token,
                         default_chat_id=self.telegram_chat_id,
                     )
+
                 except ValueError:
                     send_telegram(
                         "⚠️ Vui lòng nhập số hợp lệ cho % số dư:",
