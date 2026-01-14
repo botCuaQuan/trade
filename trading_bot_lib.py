@@ -24,13 +24,13 @@ _BINANCE_LAST_REQUEST_TIME = 0
 _BINANCE_RATE_LOCK = threading.Lock()
 _BINANCE_MIN_INTERVAL = 0.1
 
-_USDC_CACHE = {"cặp": [], "cập_nhật_cuối": 0}
-_USDC_CACHE_TTL = 30
+_USDT_CACHE = {"cặp": [], "cập_nhật_cuối": 0}  # Đổi USDC -> USDT
+_USDT_CACHE_TTL = 30
 
 _LEVERAGE_CACHE = {"dữ_liệu": {}, "cập_nhật_cuối": 0}
 _LEVERAGE_CACHE_TTL = 3600
 
-_SYMBOL_BLACKLIST = {"BTCUSDC", "ETHUSDC"}
+_SYMBOL_BLACKLIST = {"BTCUSDT", "ETHUSDT"}  # Đổi USDC -> USDT
 
 
 def setup_logging():
@@ -160,26 +160,26 @@ def create_dynamic_strategy_keyboard():
 
 def create_symbols_keyboard():
     try:
-        symbols = get_all_usdc_pairs(limit=12) or [
-            "BNBUSDC",
-            "ADAUSDC",
-            "DOGEUSDC",
-            "XRPUSDC",
-            "DOTUSDC",
-            "LINKUSDC",
-            "SOLUSDC",
-            "MATICUSDC",
+        symbols = get_all_usdt_pairs(limit=12) or [  # Đổi get_all_usdc_pairs -> get_all_usdt_pairs
+            "BNBUSDT",
+            "ADAUSDT",
+            "DOGEUSDT",
+            "XRPUSDT",
+            "DOTUSDT",
+            "LINKUSDT",
+            "SOLUSDT",
+            "MATICUSDT",
         ]
     except:
         symbols = [
-            "BNBUSDC",
-            "ADAUSDC",
-            "DOGEUSDC",
-            "XRPUSDC",
-            "DOTUSDC",
-            "LINKUSDC",
-            "SOLUSDC",
-            "MATICUSDC",
+            "BNBUSDT",  # Đổi USDC -> USDT
+            "ADAUSDT",
+            "DOGEUSDT",
+            "XRPUSDT",
+            "DOTUSDT",
+            "LINKUSDT",
+            "SOLUSDT",
+            "MATICUSDT",
         ]
 
     keyboard = []
@@ -370,34 +370,32 @@ def binance_api_request(url, method="GET", params=None, headers=None):
     return None
 
 
-def get_all_usdc_pairs(limit=50):
-    global _USDC_CACHE
+def get_all_usdt_pairs(limit=50):  # Đổi tên hàm từ get_all_usdc_pairs -> get_all_usdt_pairs
+    global _USDT_CACHE  # Đổi _USDC_CACHE -> _USDT_CACHE
     try:
         now = time.time()
-        if _USDC_CACHE["cặp"] and (
-            now - _USDC_CACHE["cập_nhật_cuối"] < _USDC_CACHE_TTL
-        ):
-            return _USDC_CACHE["cặp"][:limit]
+        if _USDT_CACHE["cặp"] and (now - _USDT_CACHE["cập_nhật_cuối"] < _USDT_CACHE_TTL):
+            return _USDT_CACHE["cặp"][:limit]
 
         url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
         data = binance_api_request(url)
         if not data:
             return []
 
-        usdc_pairs = []
+        usdt_pairs = []  # Đổi usdc_pairs -> usdt_pairs
         for symbol_info in data.get("symbols", []):
             symbol = symbol_info.get("symbol", "")
             if (
-                symbol.endswith("USDC")
+                symbol.endswith("USDT")  # Đổi USDC -> USDT
                 and symbol_info.get("status") == "TRADING"
                 and symbol not in _SYMBOL_BLACKLIST
             ):
-                usdc_pairs.append(symbol)
+                usdt_pairs.append(symbol)
 
-        _USDC_CACHE["cặp"] = usdc_pairs
-        _USDC_CACHE["cập_nhật_cuối"] = now
-        logger.info(f"✅ Đã lấy {len(usdc_pairs)} cặp USDC (loại trừ BTC/ETH)")
-        return usdc_pairs[:limit]
+        _USDT_CACHE["cặp"] = usdt_pairs
+        _USDT_CACHE["cập_nhật_cuối"] = now
+        logger.info(f"✅ Đã lấy {len(usdt_pairs)} cặp USDT (loại trừ BTC/ETH)")
+        return usdt_pairs[:limit]
 
     except Exception as e:
         logger.error(f"❌ Lỗi lấy danh sách coin: {str(e)}")
@@ -405,7 +403,7 @@ def get_all_usdc_pairs(limit=50):
 
 
 def get_top_volume_symbols(limit=20):
-    """Lấy top coin có khối lượng giao dịch cao nhất (USDC)"""
+    """Lấy top coin có khối lượng giao dịch cao nhất (USDT)"""
     try:
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         data = binance_api_request(url)
@@ -415,7 +413,7 @@ def get_top_volume_symbols(limit=20):
         volume_data = []
         for item in data:
             symbol = item.get("symbol", "")
-            if symbol.endswith("USDC") and symbol not in _SYMBOL_BLACKLIST:
+            if symbol.endswith("USDT") and symbol not in _SYMBOL_BLACKLIST:  # Đổi USDC -> USDT
                 volume = float(item.get("quoteVolume", 0))
                 volume_data.append((symbol, volume))
 
@@ -423,7 +421,7 @@ def get_top_volume_symbols(limit=20):
 
         top_symbols = [symbol for symbol, _ in volume_data[:limit]]
 
-        logger.info(f"📊 Đã lấy {len(top_symbols)} coin có khối lượng cao nhất (USDC)")
+        logger.info(f"📊 Đã lấy {len(top_symbols)} coin có khối lượng cao nhất (USDT)")
         return top_symbols
 
     except Exception as e:
@@ -432,9 +430,9 @@ def get_top_volume_symbols(limit=20):
 
 
 def get_high_volatility_symbols(limit=20, timeframe="5m", lookback=20):
-    """Lấy top coin có biến động cao nhất (USDC)"""
+    """Lấy top coin có biến động cao nhất (USDT)"""
     try:
-        all_symbols = get_all_usdc_pairs(limit=50)
+        all_symbols = get_all_usdt_pairs(limit=50)  # Đổi get_all_usdc_pairs -> get_all_usdt_pairs
         if not all_symbols:
             return []
 
@@ -470,7 +468,7 @@ def get_high_volatility_symbols(limit=20, timeframe="5m", lookback=20):
 
         top_symbols = [symbol for symbol, _ in volatility_data[:limit]]
 
-        logger.info(f"📈 Đã lấy {len(top_symbols)} coin có biến động cao nhất (USDC)")
+        logger.info(f"📈 Đã lấy {len(top_symbols)} coin có biến động cao nhất (USDT)")
         return top_symbols
 
     except Exception as e:
@@ -559,9 +557,9 @@ def get_balance(api_key, api_secret):
             return None
 
         for asset in data["assets"]:
-            if asset["asset"] == "USDC":
+            if asset["asset"] == "USDT":  # Đổi USDC -> USDT
                 available_balance = float(asset["availableBalance"])
-                logger.info(f"💰 Số dư - Khả dụng: {available_balance:.2f} USDC")
+                logger.info(f"💰 Số dư - Khả dụng: {available_balance:.2f} USDT")
                 return available_balance
         return 0
     except Exception as e:
@@ -571,9 +569,9 @@ def get_balance(api_key, api_secret):
 
 def get_total_and_available_balance(api_key, api_secret):
     """
-    Lấy TỔNG số dư (USDT + USDC) và số dư KHẢ DỤNG tương ứng.
-    total_all   = tổng walletBalance (USDT+USDC)
-    avail_all   = tổng availableBalance (USDT+USDC)
+    Lấy TỔNG số dư (USDT) và số dư KHẢ DỤNG tương ứng.
+    total_all   = tổng walletBalance (USDT)
+    avail_all   = tổng availableBalance (USDT)
     """
     try:
         ts = int(time.time() * 1000)
@@ -592,12 +590,12 @@ def get_total_and_available_balance(api_key, api_secret):
         available_all = 0.0
 
         for asset in data["assets"]:
-            if asset["asset"] in ("USDT", "USDC"):
+            if asset["asset"] == "USDT":  # Chỉ lấy USDT
                 available_all += float(asset["availableBalance"])
                 total_all += float(asset["walletBalance"])
 
         logger.info(
-            f"💰 Tổng số dư (USDT+USDC): {total_all:.2f}, "
+            f"💰 Tổng số dư (USDT): {total_all:.2f}, "
             f"Khả dụng: {available_all:.2f}"
         )
         return total_all, available_all
@@ -1056,7 +1054,7 @@ class SmartCoinFinder:
                 return None
             self.last_scan_time = now
 
-            all_symbols = get_all_usdc_pairs(limit=50)
+            all_symbols = get_all_usdt_pairs(limit=50)  # Đổi get_all_usdc_pairs -> get_all_usdt_pairs
             if not all_symbols:
                 return None
 
@@ -2173,7 +2171,7 @@ class BaseBot:
                     f"⛔ <b>ĐÃ ĐÓNG VỊ THẾ {symbol}</b>\n"
                     f"🤖 Bot: {self.bot_id}\n📌 Lý do: {reason}\n"
                     f"🏷️ Exit: {current_price:.4f}\n📊 Khối lượng: {close_qty:.4f}\n"
-                    f"💰 PnL: {pnl:.2f} USDC\n"
+                    f"💰 PnL: {pnl:.2f} USDT\n"  # Đổi USDC -> USDT
                     f"📈 Lần hạ giá trung bình: {self.symbol_data[symbol]['average_down_count']}"
                     f"{pyramiding_info}"
                 )
@@ -2675,7 +2673,7 @@ class BotManager:
                 self.log("   - Kết nối internet")
                 return False
             else:
-                self.log(f"✅ Kết nối Binance thành công! Số dư: {balance:.2f} USDC")
+                self.log(f"✅ Kết nối Binance thành công! Số dư: {balance:.2f} USDT")  # Đổi USDC -> USDT
                 return True
         except Exception as e:
             self.log(f"❌ Lỗi kiểm tra kết nối: {str(e)}")
@@ -2754,8 +2752,8 @@ class BotManager:
 
             balance = get_balance(self.api_key, self.api_secret)
             if balance is not None:
-                summary += f"💰 **SỐ DƯ**: {balance:.2f} USDC\n"
-                summary += f"📈 **Tổng PnL**: {total_unrealized_pnl:.2f} USDC\n\n"
+                summary += f"💰 **SỐ DƯ**: {balance:.2f} USDT\n"  # Đổi USDC -> USDT
+                summary += f"📈 **Tổng PnL**: {total_unrealized_pnl:.2f} USDT\n\n"  # Đổi USDC -> USDT
             else:
                 summary += f"💰 **SỐ DƯ**: ❌ Lỗi kết nối\n\n"
 
@@ -2765,9 +2763,9 @@ class BotManager:
             summary += (
                 f"   📊 Số lượng: LONG={total_long_count} | SHORT={total_short_count}\n"
             )
-            summary += f"   💰 PnL: LONG={total_long_pnl:.2f} USDC | SHORT={total_short_pnl:.2f} USDC\n"
+            summary += f"   💰 PnL: LONG={total_long_pnl:.2f} USDT | SHORT={total_short_pnl:.2f} USDT\n"  # Đổi USDC -> USDT
             summary += (
-                f"   ⚖️ Chênh lệch: {abs(total_long_pnl - total_short_pnl):.2f} USDC\n\n"
+                f"   ⚖️ Chênh lệch: {abs(total_long_pnl - total_short_pnl):.2f} USDT\n\n"  # Đổi USDC -> USDT
             )
 
             queue_info = self.bot_coordinator.get_queue_info()
@@ -2973,26 +2971,51 @@ class BotManager:
                         "sl_sell": sl_sell,
                     }
 
-                bot = bot_class(
-                    symbol,
-                    lev,
-                    percent,
-                    tp,
-                    sl,
-                    roi_trigger,
-                    self.ws_manager,
-                    self.api_key,
-                    self.api_secret,
-                    self.telegram_bot_token,
-                    self.telegram_chat_id,
-                    coin_manager=self.coin_manager,
-                    symbol_locks=self.symbol_locks,
-                    bot_coordinator=self.bot_coordinator,
-                    bot_id=bot_id,
-                    pyramiding_n=pyramiding_n,
-                    pyramiding_x=pyramiding_x,
-                    **bot_params,
-                )
+                # FIX: Đối với chiến lược combined, không truyền tp và sl chung nếu đã có tp_buy/sl_buy/tp_sell/sl_sell
+                if dynamic_strategy == "combined" and all(k in kwargs for k in ["tp_buy", "sl_buy", "tp_sell", "sl_sell"]):
+                    # Không truyền tp và sl chung, chỉ dùng tp_buy/sl_buy/tp_sell/sl_sell
+                    bot = bot_class(
+                        symbol,
+                        lev,
+                        percent,
+                        tp=None,  # Không dùng TP chung
+                        sl=None,  # Không dùng SL chung
+                        roi_trigger=roi_trigger,
+                        ws_manager=self.ws_manager,
+                        api_key=self.api_key,
+                        api_secret=self.api_secret,
+                        telegram_bot_token=self.telegram_bot_token,
+                        telegram_chat_id=self.telegram_chat_id,
+                        coin_manager=self.coin_manager,
+                        symbol_locks=self.symbol_locks,
+                        bot_coordinator=self.bot_coordinator,
+                        bot_id=bot_id,
+                        pyramiding_n=pyramiding_n,
+                        pyramiding_x=pyramiding_x,
+                        **bot_params,
+                    )
+                else:
+                    # Các chiến lược khác vẫn dùng tp và sl chung
+                    bot = bot_class(
+                        symbol,
+                        lev,
+                        percent,
+                        tp,
+                        sl,
+                        roi_trigger,
+                        self.ws_manager,
+                        self.api_key,
+                        self.api_secret,
+                        self.telegram_bot_token,
+                        self.telegram_chat_id,
+                        coin_manager=self.coin_manager,
+                        symbol_locks=self.symbol_locks,
+                        bot_coordinator=self.bot_coordinator,
+                        bot_id=bot_id,
+                        pyramiding_n=pyramiding_n,
+                        pyramiding_x=pyramiding_x,
+                        **bot_params,
+                    )
 
                 bot._bot_manager = self
                 self.bots[bot_id] = bot
@@ -3034,10 +3057,17 @@ class BotManager:
             success_msg = (
                 f"✅ <b>ĐÃ TẠO {created_count} BOT THÀNH CÔNG</b>\n\n"
                 f"🎯 Chiến lược: {strategy_type}\n💰 Đòn bẩy: {lev}x\n"
-                f"📈 % Số dư: {percent}%\n🎯 TP: {tp}%\n"
-                f"🛡️ SL: {sl if sl is not None else 'Tắt'}%{roi_info}{pyramiding_info}{mode_info}\n"
-                f"🔧 Chế độ: {bot_mode}\n🔢 Số bot: {created_count}\n⭐ Coin/bot: 1\n"
+                f"📈 % Số dư: {percent}%\n"
             )
+            
+            # Chỉ hiển thị TP/SL chung nếu không phải combined
+            if dynamic_strategy != "combined":
+                success_msg += f"🎯 TP: {tp}%\n🛡️ SL: {sl if sl is not None else 'Tắt'}%"
+            else:
+                success_msg += f"🎯 TP/SL: Riêng cho Mua/Bán"
+                
+            success_msg += f"{roi_info}{pyramiding_info}{mode_info}\n"
+            success_msg += f"🔧 Chế độ: {bot_mode}\n🔢 Số bot: {created_count}\n⭐ Coin/bot: 1\n"
 
             if bot_mode == "static" and symbol:
                 success_msg += f"🔗 Coin: {symbol}\n"
@@ -3205,7 +3235,7 @@ class BotManager:
                 return
 
             send_telegram(
-                f"🎯 <b>CHỌN LOẠI BOT</b>\n\n💰 Số dư hiện tại: <b>{balance:.2f} USDC</b>\n\nChọn loại bot:",
+                f"🎯 <b>CHỌN LOẠI BOT</b>\n\n💰 Số dư hiện tại: <b>{balance:.2f} USDT</b>\n\nChọn loại bot:",
                 chat_id=chat_id,
                 reply_markup=create_bot_mode_keyboard(),
                 bot_token=self.telegram_bot_token,
@@ -3621,7 +3651,7 @@ class BotManager:
 
                     balance = get_balance(self.api_key, self.api_secret)
                     balance_info = (
-                        f"\n💰 Số dư hiện tại: {balance:.2f} USDC" if balance else ""
+                        f"\n💰 Số dư hiện tại: {balance:.2f} USDT" if balance else ""  # Đổi USDC -> USDT
                     )
 
                     send_telegram(
@@ -3665,25 +3695,21 @@ class BotManager:
 
                     user_state["percent"] = percent
 
-                    # ✅ Nếu là bot động + combined và đã có TP/SL mua-bán -> bỏ qua TP/SL chung
-                    if user_state.get("bot_mode") == "dynamic" and user_state.get("dynamic_strategy") == "combined":
-                        if all(k in user_state for k in ("tp_buy", "sl_buy", "tp_sell", "sl_sell")):
-                            # gán tp/sl chung để BotManager.add_bot vẫn nhận đủ tham số
-                            user_state["tp"] = user_state["tp_buy"]
-                            user_state["sl"] = user_state["sl_buy"]
-                            user_state["step"] = "waiting_pyramiding_n"
+                    # ✅ Nếu là chiến lược combined -> bỏ qua TP/SL chung
+                    if user_state.get("dynamic_strategy") == "combined":
+                        # Không yêu cầu TP/SL chung, đi thẳng đến pyramiding
+                        user_state["step"] = "waiting_pyramiding_n"
+                        send_telegram(
+                            f"📊 % Số dư: {percent}%\n✅ Đã có TP/SL riêng cho Mua-Bán, bỏ qua TP/SL chung.\n\n"
+                            "Nhập số lần nhồi lệnh (0 để tắt):",
+                            chat_id=chat_id,
+                            reply_markup=create_pyramiding_n_keyboard(),
+                            bot_token=self.telegram_bot_token,
+                            default_chat_id=self.telegram_chat_id,
+                        )
+                        return
                     
-                            send_telegram(
-                                f"📊 % Số dư: {percent}%\n✅ Đã có TP/SL Mua-Bán, bỏ qua TP/SL chung.\n\n"
-                                "Nhập số lần nhồi lệnh (0 để tắt):",
-                                chat_id=chat_id,
-                                reply_markup=create_pyramiding_n_keyboard(),
-                                bot_token=self.telegram_bot_token,
-                                default_chat_id=self.telegram_chat_id,
-                            )
-                            return
-                    
-                    # 🔁 Còn lại giữ flow cũ cho volume/volatility và bot tĩnh
+                    # 🔁 Các chiến lược khác vẫn yêu cầu TP/SL chung
                     user_state["step"] = "waiting_tp"
                     send_telegram(
                         f"📊 % Số dư: {percent}%\n\nChọn Take Profit (%):",
@@ -4058,7 +4084,7 @@ class BotManager:
                     )
                 else:
                     send_telegram(
-                        f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDC",
+                        f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDT",  # Đổi USDC -> USDT
                         chat_id=chat_id,
                         bot_token=self.telegram_bot_token,
                         default_chat_id=self.telegram_chat_id,
@@ -4097,7 +4123,7 @@ class BotManager:
                             f"🔹 {symbol} | {side}\n"
                             f"📊 Khối lượng: {abs(position_amt):.4f}\n"
                             f"🏷️ Entry: {entry:.4f}\n"
-                            f"💰 PnL: {pnl:.2f} USDC\n\n"
+                            f"💰 PnL: {pnl:.2f} USDT\n\n"  # Đổi USDC -> USDT
                         )
                 send_telegram(
                     message,
@@ -4205,8 +4231,15 @@ class BotManager:
             bot_mode = user_state.get("bot_mode", "static")
             leverage = user_state.get("leverage")
             percent = user_state.get("percent")
-            tp = user_state.get("tp")
-            sl = user_state.get("sl")
+            
+            # Chỉ lấy TP/SL chung nếu không phải chiến lược combined
+            if user_state.get("dynamic_strategy") == "combined":
+                tp = None
+                sl = None
+            else:
+                tp = user_state.get("tp")
+                sl = user_state.get("sl")
+                
             roi_trigger = user_state.get("roi_trigger")
             symbol = user_state.get("symbol")
             bot_count = user_state.get("bot_count", 1)
@@ -4274,10 +4307,18 @@ class BotManager:
                     f"✅ <b>ĐÃ TẠO BOT THÀNH CÔNG</b>\n\n"
                     f"🤖 Chiến lược: Đa-Chiến-Lược\n🔧 Chế độ: {bot_mode}\n"
                     f"🔢 Số bot: {bot_count}\n💰 Đòn bẩy: {leverage}x\n"
-                    f"📊 % Số dư: {percent}%\n🎯 TP: {tp}%\n"
-                    f"🛡️ SL: {sl}%{roi_info}{pyramiding_info}{mode_info}\n"
-                    f"⭐ Coin/bot: 1 (cố định)\n"
+                    f"📊 % Số dư: {percent}%\n"
                 )
+                
+                # Chỉ hiển thị TP/SL chung nếu không phải combined
+                if dynamic_strategy != "combined":
+                    success_msg += f"🎯 TP: {tp}%\n🛡️ SL: {sl}%"
+                else:
+                    success_msg += "🎯 TP/SL: Riêng cho Mua/Bán"
+                    
+                success_msg += f"{roi_info}{pyramiding_info}{mode_info}\n"
+                success_msg += f"⭐ Coin/bot: 1 (cố định)\n"
+                
                 if bot_mode == "static" and symbol:
                     success_msg += f"🔗 Coin: {symbol}"
 
