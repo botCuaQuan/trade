@@ -2510,6 +2510,7 @@ class VolatilityStrategyBot(BaseBot):
         bot_id=None,
         **kwargs,
     ):
+        kwargs.pop("dynamic_strategy", None)
         pyramiding_n = kwargs.pop("pyramiding_n", 0)
         pyramiding_x = kwargs.pop("pyramiding_x", 0)
         reverse_on_stop = kwargs.pop("reverse_on_stop", False)
@@ -2554,6 +2555,7 @@ class CombinedStrategyBot(BaseBot):
         bot_id=None,
         **kwargs,
     ):
+        kwargs.pop("dynamic_strategy", None)
         tp_buy = kwargs.pop("tp_buy", tp)
         sl_buy = kwargs.pop("sl_buy", sl)
         tp_sell = kwargs.pop("tp_sell", tp)
@@ -2606,6 +2608,7 @@ class StaticMarketBot(BaseBot):
         bot_id=None,
         **kwargs,
     ):
+        kwargs.pop("dynamic_strategy", None)
         static_entry_mode = kwargs.pop("static_entry_mode", "signal")
         pyramiding_n = kwargs.pop("pyramiding_n", 0)
         pyramiding_x = kwargs.pop("pyramiding_x", 0)
@@ -2967,7 +2970,6 @@ class BotManager:
                         bot_class = CombinedStrategyBot
                     
                     bot_params = {
-                        "dynamic_strategy": dynamic_strategy,
                         "max_coins": max_coins,
                         "reverse_on_stop": reverse_on_stop,
                         "reverse_on_sell": reverse_on_sell,
