@@ -24,13 +24,25 @@ _BINANCE_LAST_REQUEST_TIME = 0
 _BINANCE_RATE_LOCK = threading.Lock()
 _BINANCE_MIN_INTERVAL = 0.1
 
-_USDT_CACHE = {"cặp": [], "cập_nhật_cuối": 0}  # Đổi USDC -> USDT
+_USDT_CACHE = {"cặp": [], "cập_nhật_cuối": 0}
 _USDT_CACHE_TTL = 30
 
 _LEVERAGE_CACHE = {"dữ_liệu": {}, "cập_nhật_cuối": 0}
 _LEVERAGE_CACHE_TTL = 3600
 
-_SYMBOL_BLACKLIST = {"BTCUSDT", "ETHUSDT"}  # Đổi USDC -> USDT
+_STEP_SIZE_CACHE = {"dữ_liệu": {}, "cập_nhật_cuối": 0}
+_STEP_SIZE_CACHE_TTL = 3600
+
+_EXCHANGE_INFO_CACHE = {"dữ_liệu": None, "cập_nhật_cuối": 0}
+_EXCHANGE_INFO_CACHE_TTL = 3600
+
+_SYMBOL_BLACKLIST = {"BTCUSDT", "ETHUSDT"}
+
+# Biến để kiểm soát log spam
+_LAST_MARGIN_LOG_TIME = 0
+_MARGIN_LOG_INTERVAL = 60
+_LAST_API_ERROR_LOG_TIME = 0
+_API_ERROR_LOG_INTERVAL = 10
 
 
 def setup_logging():
@@ -160,7 +172,7 @@ def create_dynamic_strategy_keyboard():
 
 def create_symbols_keyboard():
     try:
-        symbols = get_all_usdt_pairs(limit=12) or [  # Đổi get_all_usdc_pairs -> get_all_usdt_pairs
+        symbols = get_all_usdt_pairs(limit=12) or [
             "BNBUSDT",
             "ADAUSDT",
             "DOGEUSDT",
@@ -172,7 +184,7 @@ def create_symbols_keyboard():
         ]
     except:
         symbols = [
-            "BNBUSDT",  # Đổi USDC -> USDT
+            "BNBUSDT",
             "ADAUSDT",
             "DOGEUSDT",
             "XRPUSDT",
@@ -363,15 +375,19 @@ def binance_api_request(url, method="GET", params=None, headers=None):
             continue
 
         except Exception as e:
-            logger.error(f"Lỗi kết nối API (lần thử {attempt + 1}): {str(e)}")
+            global _LAST_API_ERROR_LOG_TIME
+            current_time = time.time()
+            if current_time - _LAST_API_ERROR_LOG_TIME > _API_ERROR_LOG_INTERVAL:
+                logger.error(f"Lỗi kết nối API (lần thử {attempt + 1}): {str(e)}")
+                _LAST_API_ERROR_LOG_TIME = current_time
             time.sleep(0.5)
 
     logger.error(f"Thất bại yêu cầu API sau {max_retries} lần thử")
     return None
 
 
-def get_all_usdt_pairs(limit=50):  # Đổi tên hàm từ get_all_usdc_pairs -> get_all_usdt_pairs
-    global _USDT_CACHE  # Đổi _USDC_CACHE -> _USDT_CACHE
+def get_all_usdt_pairs(limit=50):
+    global _USDT_CACHE
     try:
         now = time.time()
         if _USDT_CACHE["cặp"] and (now - _USDT_CACHE["cập_nhật_cuối"] < _USDT_CACHE_TTL):
@@ -382,11 +398,11 @@ def get_all_usdt_pairs(limit=50):  # Đổi tên hàm từ get_all_usdc_pairs ->
         if not data:
             return []
 
-        usdt_pairs = []  # Đổi usdc_pairs -> usdt_pairs
+        usdt_pairs = []
         for symbol_info in data.get("symbols", []):
             symbol = symbol_info.get("symbol", "")
             if (
-                symbol.endswith("USDT")  # Đổi USDC -> USDT
+                symbol.endswith("USDT")
                 and symbol_info.get("status") == "TRADING"
                 and symbol not in _SYMBOL_BLACKLIST
             ):
@@ -413,7 +429,7 @@ def get_top_volume_symbols(limit=20):
         volume_data = []
         for item in data:
             symbol = item.get("symbol", "")
-            if symbol.endswith("USDT") and symbol not in _SYMBOL_BLACKLIST:  # Đổi USDC -> USDT
+            if symbol.endswith("USDT") and symbol not in _SYMBOL_BLACKLIST:
                 volume = float(item.get("quoteVolume", 0))
                 volume_data.append((symbol, volume))
 
@@ -432,7 +448,7 @@ def get_top_volume_symbols(limit=20):
 def get_high_volatility_symbols(limit=20, timeframe="5m", lookback=20):
     """Lấy top coin có biến động cao nhất (USDT)"""
     try:
-        all_symbols = get_all_usdt_pairs(limit=50)  # Đổi get_all_usdc_pairs -> get_all_usdt_pairs
+        all_symbols = get_all_usdt_pairs(limit=50)
         if not all_symbols:
             return []
 
@@ -476,6 +492,29 @@ def get_high_volatility_symbols(limit=20, timeframe="5m", lookback=20):
         return []
 
 
+def get_exchange_info():
+    """Lấy và cache exchangeInfo"""
+    global _EXCHANGE_INFO_CACHE
+    try:
+        current_time = time.time()
+        
+        if (_EXCHANGE_INFO_CACHE["dữ_liệu"] is not None and 
+            current_time - _EXCHANGE_INFO_CACHE["cập_nhật_cuối"] < _EXCHANGE_INFO_CACHE_TTL):
+            return _EXCHANGE_INFO_CACHE["dữ_liệu"]
+        
+        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+        data = binance_api_request(url)
+        
+        if data:
+            _EXCHANGE_INFO_CACHE["dữ_liệu"] = data
+            _EXCHANGE_INFO_CACHE["cập_nhật_cuối"] = current_time
+        
+        return data
+    except Exception as e:
+        logger.error(f"Lỗi lấy exchangeInfo: {str(e)}")
+        return None
+
+
 def get_max_leverage(symbol, api_key, api_secret):
     global _LEVERAGE_CACHE
     try:
@@ -488,12 +527,11 @@ def get_max_leverage(symbol, api_key, api_secret):
         ):
             return _LEVERAGE_CACHE["dữ_liệu"][symbol]
 
-        url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
-        data = binance_api_request(url)
-        if not data:
+        exchange_info = get_exchange_info()
+        if not exchange_info:
             return 100
 
-        for s in data["symbols"]:
+        for s in exchange_info["symbols"]:
             if s["symbol"] == symbol:
                 for f in s["filters"]:
                     if f["filterType"] == "LEVERAGE" and "maxLeverage" in f:
@@ -508,20 +546,33 @@ def get_max_leverage(symbol, api_key, api_secret):
 
 
 def get_step_size(symbol, api_key, api_secret):
+    global _STEP_SIZE_CACHE
     if not symbol:
         return 0.001
-    url = "https://fapi.binance.com/fapi/v1/exchangeInfo"
+    
+    symbol = symbol.upper()
+    current_time = time.time()
+    
+    if (symbol in _STEP_SIZE_CACHE["dữ_liệu"] and 
+        current_time - _STEP_SIZE_CACHE["cập_nhật_cuối"] < _STEP_SIZE_CACHE_TTL):
+        return _STEP_SIZE_CACHE["dữ_liệu"][symbol]
+    
     try:
-        data = binance_api_request(url)
-        if not data:
+        exchange_info = get_exchange_info()
+        if not exchange_info:
             return 0.001
-        for s in data["symbols"]:
-            if s["symbol"] == symbol.upper():
+            
+        for s in exchange_info["symbols"]:
+            if s["symbol"] == symbol:
                 for f in s["filters"]:
                     if f["filterType"] == "LOT_SIZE":
-                        return float(f["stepSize"])
+                        step_size = float(f["stepSize"])
+                        _STEP_SIZE_CACHE["dữ_liệu"][symbol] = step_size
+                        _STEP_SIZE_CACHE["cập_nhật_cuối"] = current_time
+                        return step_size
     except Exception as e:
         logger.error(f"Lỗi step size: {str(e)}")
+    
     return 0.001
 
 
@@ -556,12 +607,27 @@ def get_balance(api_key, api_secret):
         if not data:
             return None
 
+        # Tính tổng số dư USDT và USDC (nếu có) để đảm bảo không nhầm thành 0
+        total_balance = 0.0
         for asset in data["assets"]:
-            if asset["asset"] == "USDT":  # Đổi USDC -> USDT
+            if asset["asset"] in ["USDT", "USDC"]:
                 available_balance = float(asset["availableBalance"])
-                logger.info(f"💰 Số dư - Khả dụng: {available_balance:.2f} USDT")
-                return available_balance
-        return 0
+                wallet_balance = float(asset["walletBalance"])
+                # Ưu tiên sử dụng availableBalance, nhưng nếu = 0 thì dùng walletBalance
+                if available_balance > 0:
+                    total_balance += available_balance
+                else:
+                    total_balance += wallet_balance
+
+        if total_balance <= 0:
+            # Nếu vẫn = 0, kiểm tra lại với availableBalance
+            for asset in data["assets"]:
+                if asset["asset"] == "USDT":
+                    total_balance = float(asset["availableBalance"])
+                    break
+        
+        logger.info(f"💰 Số dư - Khả dụng: {total_balance:.2f} USDT")
+        return total_balance
     except Exception as e:
         logger.error(f"Lỗi số dư: {str(e)}")
         return None
@@ -569,9 +635,7 @@ def get_balance(api_key, api_secret):
 
 def get_total_and_available_balance(api_key, api_secret):
     """
-    Lấy TỔNG số dư (USDT) và số dư KHẢ DỤNG tương ứng.
-    total_all   = tổng walletBalance (USDT)
-    avail_all   = tổng availableBalance (USDT)
+    Lấy TỔNG số dư (USDT + USDC) và số dư KHẢ DỤNG tương ứng.
     """
     try:
         ts = int(time.time() * 1000)
@@ -589,13 +653,22 @@ def get_total_and_available_balance(api_key, api_secret):
         total_all = 0.0
         available_all = 0.0
 
+        # Tính tổng cả USDT và USDC để đảm bảo không bị 0
         for asset in data["assets"]:
-            if asset["asset"] == "USDT":  # Chỉ lấy USDT
+            if asset["asset"] in ["USDT", "USDC"]:
                 available_all += float(asset["availableBalance"])
                 total_all += float(asset["walletBalance"])
 
+        # Nếu tổng = 0, thử lấy USDT riêng
+        if total_all <= 0:
+            for asset in data["assets"]:
+                if asset["asset"] == "USDT":
+                    total_all = float(asset["walletBalance"])
+                    available_all = float(asset["availableBalance"])
+                    break
+
         logger.info(
-            f"💰 Tổng số dư (USDT): {total_all:.2f}, "
+            f"💰 Tổng số dư: {total_all:.2f}, "
             f"Khả dụng: {available_all:.2f}"
         )
         return total_all, available_all
@@ -611,6 +684,7 @@ def get_margin_safety_info(api_key, api_secret):
       - maint_margin   = totalMaintMargin (tổng mức duy trì ký quỹ)
       - ratio          = margin_balance / maint_margin  (nếu maint_margin > 0)
     """
+    global _LAST_MARGIN_LOG_TIME
     try:
         ts = int(time.time() * 1000)
         params = {"timestamp": ts}
@@ -627,23 +701,45 @@ def get_margin_safety_info(api_key, api_secret):
         margin_balance = float(data.get("totalMarginBalance", 0.0))
         maint_margin = float(data.get("totalMaintMargin", 0.0))
 
+        # FIX 1: Chặn spam "maint margin" - nếu maint_margin <= 0 thì return luôn
+        if maint_margin <= 0:
+            return margin_balance, maint_margin, None
+
         ratio = margin_balance / maint_margin
 
-        logger.info(
-            f"🛡️ An toàn ký quỹ: margin_balance={margin_balance:.4f}, "
-            f"maint_margin={maint_margin:.4f}, tỷ lệ={ratio:.2f}x"
-        )
+        current_time = time.time()
+        if current_time - _LAST_MARGIN_LOG_TIME > _MARGIN_LOG_INTERVAL:
+            logger.info(
+                f"🛡️ An toàn ký quỹ: margin_balance={margin_balance:.4f}, "
+                f"maint_margin={maint_margin:.4f}, tỷ lệ={ratio:.2f}x"
+            )
+            _LAST_MARGIN_LOG_TIME = current_time
+
         return margin_balance, maint_margin, ratio
 
     except Exception as e:
-        logger.error(f"Lỗi lấy thông tin an toàn ký quỹ: {str(e)}")
+        current_time = time.time()
+        if current_time - _LAST_MARGIN_LOG_TIME > _MARGIN_LOG_INTERVAL:
+            logger.error(f"Lỗi lấy thông tin an toàn ký quỹ: {str(e)}")
+            _LAST_MARGIN_LOG_TIME = current_time
         return None, None, None
 
 
 def place_order(symbol, side, qty, api_key, api_secret):
-    if not symbol:
+    # FIX 3: Chặn đặt lệnh với khối lượng không hợp lệ
+    if not symbol or side not in ["BUY", "SELL"]:
         return None
+    
+    if qty <= 0:
+        logger.error(f"❌ Khối lượng không hợp lệ: {qty}")
+        return None
+    
     try:
+        step_size = get_step_size(symbol, api_key, api_secret)
+        if qty < step_size:
+            logger.error(f"❌ Khối lượng {qty} nhỏ hơn step size {step_size}")
+            return None
+            
         ts = int(time.time() * 1000)
         params = {
             "symbol": symbol.upper(),
@@ -840,9 +936,33 @@ class SmartCoinFinder:
         self.api_key = api_key
         self.api_secret = api_secret
         self.last_scan_time = 0
-        self.scan_cooldown = 10
+        self.scan_cooldown = 20  # Tăng cooldown để giảm spam API
         self.analysis_cache = {}
         self.cache_ttl = 30
+        self.last_positions_fetch = 0
+        self.cached_positions = set()
+        self.positions_cache_ttl = 10
+
+    def _get_all_positions(self):
+        """Lấy tất cả vị thế và cache trong thời gian ngắn"""
+        current_time = time.time()
+        if current_time - self.last_positions_fetch < self.positions_cache_ttl:
+            return self.cached_positions.copy()
+        
+        try:
+            positions = get_positions(api_key=self.api_key, api_secret=self.api_secret)
+            symbol_set = set()
+            for pos in positions:
+                position_amt = float(pos.get("positionAmt", 0))
+                if abs(position_amt) > 0:
+                    symbol_set.add(pos.get("symbol", "").upper())
+            
+            self.cached_positions = symbol_set
+            self.last_positions_fetch = current_time
+            return symbol_set
+        except Exception as e:
+            logger.error(f"Lỗi lấy vị thế: {str(e)}")
+            return set()
 
     def get_symbol_leverage(self, symbol):
         return get_max_leverage(symbol, self.api_key, self.api_secret)
@@ -945,14 +1065,10 @@ class SmartCoinFinder:
         return self.get_rsi_signal(symbol, volume_threshold=100)
 
     def has_existing_position(self, symbol):
+        """Kiểm tra xem symbol có đang có vị thế không (dùng cache)"""
         try:
-            positions = get_positions(symbol, self.api_key, self.api_secret)
-            if positions:
-                for pos in positions:
-                    if abs(float(pos.get("positionAmt", 0))) > 0:
-                        logger.info(f"⚠️ Đã phát hiện vị thế trên {symbol}")
-                        return True
-            return False
+            positions_set = self._get_all_positions()
+            return symbol.upper() in positions_set
         except Exception as e:
             logger.error(f"Lỗi kiểm tra vị thế {symbol}: {str(e)}")
             return True
@@ -965,15 +1081,19 @@ class SmartCoinFinder:
                 return None
             self.last_scan_time = now
 
-            top_coins = get_top_volume_symbols(limit=30)
+            # FIX 5: Giảm số coin scan
+            top_coins = get_top_volume_symbols(limit=20)
             if not top_coins:
                 return None
+
+            # FIX 5.1: Lấy tất cả vị thế một lần
+            positions_set = self._get_all_positions()
 
             valid_coins = []
             for symbol in top_coins:
                 if excluded_coins and symbol in excluded_coins:
                     continue
-                if self.has_existing_position(symbol):
+                if symbol in positions_set:
                     continue
 
                 max_lev = self.get_symbol_leverage(symbol)
@@ -992,7 +1112,7 @@ class SmartCoinFinder:
 
             selected_symbol, _ = random.choice(valid_coins)
 
-            if self.has_existing_position(selected_symbol):
+            if selected_symbol in positions_set:
                 return None
 
             logger.info(f"🎯 Đã chọn coin theo volume: {selected_symbol}")
@@ -1010,15 +1130,19 @@ class SmartCoinFinder:
                 return None
             self.last_scan_time = now
 
-            top_coins = get_high_volatility_symbols(limit=30)
+            # FIX 5: Giảm số coin scan
+            top_coins = get_high_volatility_symbols(limit=20)
             if not top_coins:
                 return None
+
+            # FIX 5.1: Lấy tất cả vị thế một lần
+            positions_set = self._get_all_positions()
 
             valid_coins = []
             for symbol in top_coins:
                 if excluded_coins and symbol in excluded_coins:
                     continue
-                if self.has_existing_position(symbol):
+                if symbol in positions_set:
                     continue
 
                 max_lev = self.get_symbol_leverage(symbol)
@@ -1037,7 +1161,7 @@ class SmartCoinFinder:
 
             selected_symbol, _ = random.choice(valid_coins)
 
-            if self.has_existing_position(selected_symbol):
+            if selected_symbol in positions_set:
                 return None
 
             logger.info(f"🎯 Đã chọn coin theo biến động: {selected_symbol}")
@@ -1054,15 +1178,19 @@ class SmartCoinFinder:
                 return None
             self.last_scan_time = now
 
-            all_symbols = get_all_usdt_pairs(limit=50)  # Đổi get_all_usdc_pairs -> get_all_usdt_pairs
+            # FIX 5: Giảm số coin scan
+            all_symbols = get_all_usdt_pairs(limit=20)
             if not all_symbols:
                 return None
+
+            # FIX 5.1: Lấy tất cả vị thế một lần
+            positions_set = self._get_all_positions()
 
             valid_symbols = []
             for symbol in all_symbols:
                 if excluded_coins and symbol in excluded_coins:
                     continue
-                if self.has_existing_position(symbol):
+                if symbol in positions_set:
                     continue
 
                 max_lev = self.get_symbol_leverage(symbol)
@@ -1081,7 +1209,7 @@ class SmartCoinFinder:
                 return None
             selected_symbol, _ = random.choice(valid_symbols)
 
-            if self.has_existing_position(selected_symbol):
+            if selected_symbol in positions_set:
                 return None
             logger.info(f"🎯 Đã chọn coin: {selected_symbol}")
             return selected_symbol
@@ -1223,6 +1351,20 @@ class BaseBot:
         self.tp_sell = tp_sell if tp_sell is not None else tp
         self.sl_sell = sl_sell if sl_sell is not None else sl
         self.reverse_on_sell = reverse_on_sell
+
+        # FIX 4: Xử lý TP/SL = 0 (coi là "tắt")
+        if self.tp == 0:
+            self.tp = None
+        if self.sl == 0:
+            self.sl = None
+        if self.tp_buy == 0:
+            self.tp_buy = None
+        if self.sl_buy == 0:
+            self.sl_buy = None
+        if self.tp_sell == 0:
+            self.tp_sell = None
+        if self.sl_sell == 0:
+            self.sl_sell = None
 
         self.max_coins = 1
         self.active_symbols = []
@@ -1671,8 +1813,9 @@ class BaseBot:
                 qty = math.floor(qty / step_size) * step_size
                 qty = round(qty, 8)
 
+            # FIX 3: Chặn khối lượng không hợp lệ
             if qty <= 0 or qty < step_size:
-                self.log(f"❌ {symbol} - Khối lượng không hợp lệ khi nhồi lệnh")
+                self.log(f"❌ {symbol} - Khối lượng không hợp lệ khi nhồi lệnh: {qty} < {step_size}")
                 return False
 
             cancel_all_orders(symbol, self.api_key, self.api_secret)
@@ -2006,8 +2149,9 @@ class BaseBot:
                 qty = math.floor(qty / step_size) * step_size
                 qty = round(qty, 8)
 
-            if qty < 0 or qty <= step_size:
-                self.log(f"❌ {symbol} - Khối lượng không hợp lệ")
+            # FIX 3: Chặn khối lượng không hợp lệ
+            if qty <= 0 or qty <= step_size:
+                self.log(f"❌ {symbol} - Khối lượng không hợp lệ: {qty} <= {step_size}")
                 self.stop_symbol(symbol)
                 return False
 
@@ -2171,7 +2315,7 @@ class BaseBot:
                     f"⛔ <b>ĐÃ ĐÓNG VỊ THẾ {symbol}</b>\n"
                     f"🤖 Bot: {self.bot_id}\n📌 Lý do: {reason}\n"
                     f"🏷️ Exit: {current_price:.4f}\n📊 Khối lượng: {close_qty:.4f}\n"
-                    f"💰 PnL: {pnl:.2f} USDT\n"  # Đổi USDC -> USDT
+                    f"💰 PnL: {pnl:.2f} USDT\n"
                     f"📈 Lần hạ giá trung bình: {self.symbol_data[symbol]['average_down_count']}"
                     f"{pyramiding_info}"
                 )
@@ -2294,7 +2438,8 @@ class BaseBot:
             tp = self.tp
             sl = self.sl
 
-        if tp is not None and roi >= tp:
+        # FIX 4: TP/SL = 0 thì coi là "tắt", không kiểm tra
+        if tp is not None and tp > 0 and roi >= tp:
             self._close_symbol_position(
                 symbol, f"✅ Đạt TP {tp}% (ROI: {roi:.2f}%)"
             )
@@ -2625,7 +2770,6 @@ class StaticMarketBot(BaseBot):
             **kwargs,
         )
 
-
 class BotManager:
     def __init__(
         self,
@@ -2673,7 +2817,7 @@ class BotManager:
                 self.log("   - Kết nối internet")
                 return False
             else:
-                self.log(f"✅ Kết nối Binance thành công! Số dư: {balance:.2f} USDT")  # Đổi USDC -> USDT
+                self.log(f"✅ Kết nối Binance thành công! Số dư: {balance:.2f} USDT")
                 return True
         except Exception as e:
             self.log(f"❌ Lỗi kiểm tra kết nối: {str(e)}")
@@ -2752,8 +2896,8 @@ class BotManager:
 
             balance = get_balance(self.api_key, self.api_secret)
             if balance is not None:
-                summary += f"💰 **SỐ DƯ**: {balance:.2f} USDT\n"  # Đổi USDC -> USDT
-                summary += f"📈 **Tổng PnL**: {total_unrealized_pnl:.2f} USDT\n\n"  # Đổi USDC -> USDT
+                summary += f"💰 **SỐ DƯ**: {balance:.2f} USDT\n"
+                summary += f"📈 **Tổng PnL**: {total_unrealized_pnl:.2f} USDT\n\n"
             else:
                 summary += f"💰 **SỐ DƯ**: ❌ Lỗi kết nối\n\n"
 
@@ -2763,9 +2907,9 @@ class BotManager:
             summary += (
                 f"   📊 Số lượng: LONG={total_long_count} | SHORT={total_short_count}\n"
             )
-            summary += f"   💰 PnL: LONG={total_long_pnl:.2f} USDT | SHORT={total_short_pnl:.2f} USDT\n"  # Đổi USDC -> USDT
+            summary += f"   💰 PnL: LONG={total_long_pnl:.2f} USDT | SHORT={total_short_pnl:.2f} USDT\n"
             summary += (
-                f"   ⚖️ Chênh lệch: {abs(total_long_pnl - total_short_pnl):.2f} USDT\n\n"  # Đổi USDC -> USDT
+                f"   ⚖️ Chênh lệch: {abs(total_long_pnl - total_short_pnl):.2f} USDT\n\n"
             )
 
             queue_info = self.bot_coordinator.get_queue_info()
@@ -2914,8 +3058,11 @@ class BotManager:
         bot_count=1,
         **kwargs,
     ):
+        # FIX 4: Xử lý SL = 0 (coi là "tắt")
         if sl == 0:
             sl = None
+        if tp == 0:
+            tp = None
 
         if not self.api_key or not self.api_secret:
             self.log("❌ API Key chưa được cài đặt trong BotManager")
@@ -2937,6 +3084,17 @@ class BotManager:
         sl_buy = kwargs.get("sl_buy", sl)
         tp_sell = kwargs.get("tp_sell", tp)
         sl_sell = kwargs.get("sl_sell", sl)
+
+        # FIX 4: Xử lý TP/SL = 0 cho combined strategy
+        if dynamic_strategy == "combined":
+            if tp_buy == 0:
+                tp_buy = None
+            if sl_buy == 0:
+                sl_buy = None
+            if tp_sell == 0:
+                tp_sell = None
+            if sl_sell == 0:
+                sl_sell = None
 
         created_count = 0
 
@@ -3062,7 +3220,7 @@ class BotManager:
             
             # Chỉ hiển thị TP/SL chung nếu không phải combined
             if dynamic_strategy != "combined":
-                success_msg += f"🎯 TP: {tp}%\n🛡️ SL: {sl if sl is not None else 'Tắt'}%"
+                success_msg += f"🎯 TP: {tp if tp is not None else 'Tắt'}%\n🛡️ SL: {sl if sl is not None else 'Tắt'}%"
             else:
                 success_msg += f"🎯 TP/SL: Riêng cho Mua/Bán"
                 
@@ -3215,7 +3373,10 @@ class BotManager:
                 time.sleep(0.5)
 
             except Exception as e:
-                logger.error(f"Lỗi nghe Telegram: {str(e)}")
+                current_time = time.time()
+                if current_time - _LAST_API_ERROR_LOG_TIME > _API_ERROR_LOG_INTERVAL:
+                    logger.error(f"Lỗi nghe Telegram: {str(e)}")
+                    _LAST_API_ERROR_LOG_TIME = current_time
                 time.sleep(1)
 
     def _handle_telegram_message(self, chat_id, text):
@@ -3651,7 +3812,7 @@ class BotManager:
 
                     balance = get_balance(self.api_key, self.api_secret)
                     balance_info = (
-                        f"\n💰 Số dư hiện tại: {balance:.2f} USDT" if balance else ""  # Đổi USDC -> USDT
+                        f"\n💰 Số dư hiện tại: {balance:.2f} USDT" if balance else ""
                     )
 
                     send_telegram(
@@ -4084,7 +4245,7 @@ class BotManager:
                     )
                 else:
                     send_telegram(
-                        f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDT",  # Đổi USDC -> USDT
+                        f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDT",
                         chat_id=chat_id,
                         bot_token=self.telegram_bot_token,
                         default_chat_id=self.telegram_chat_id,
@@ -4123,7 +4284,7 @@ class BotManager:
                             f"🔹 {symbol} | {side}\n"
                             f"📊 Khối lượng: {abs(position_amt):.4f}\n"
                             f"🏷️ Entry: {entry:.4f}\n"
-                            f"💰 PnL: {pnl:.2f} USDT\n\n"  # Đổi USDC -> USDT
+                            f"💰 PnL: {pnl:.2f} USDT\n\n"
                         )
                 send_telegram(
                     message,
@@ -4255,6 +4416,20 @@ class BotManager:
             tp_sell = user_state.get("tp_sell", tp)
             sl_sell = user_state.get("sl_sell", sl)
 
+            # FIX 4: Xử lý TP/SL = 0
+            if tp == 0:
+                tp = None
+            if sl == 0:
+                sl = None
+            if tp_buy == 0:
+                tp_buy = None
+            if sl_buy == 0:
+                sl_buy = None
+            if tp_sell == 0:
+                tp_sell = None
+            if sl_sell == 0:
+                sl_sell = None
+
             success = self.add_bot(
                 symbol=symbol,
                 lev=leverage,
@@ -4312,7 +4487,7 @@ class BotManager:
                 
                 # Chỉ hiển thị TP/SL chung nếu không phải combined
                 if dynamic_strategy != "combined":
-                    success_msg += f"🎯 TP: {tp}%\n🛡️ SL: {sl}%"
+                    success_msg += f"🎯 TP: {tp if tp is not None else 'Tắt'}%\n🛡️ SL: {sl if sl is not None else 'Tắt'}%"
                 else:
                     success_msg += "🎯 TP/SL: Riêng cho Mua/Bán"
                     
