@@ -346,7 +346,16 @@ def binance_api_request(url, method="GET", params=None, headers=None):
                     return json.loads(response.read().decode())
                 else:
                     error_content = response.read().decode()
-                    logger.error(f"Lỗi API ({response.status}): {error_content}")
+                    # LOG CHI TIẾT CHO BAD REQUEST (400)
+                    if response.status == 400:
+                        logger.error(f"❌❌❌ BAD REQUEST (400) CHI TIẾT: {error_content}")
+                        logger.error(f"URL: {url}")
+                        logger.error(f"Method: {method}")
+                        logger.error(f"Params: {params}")
+                        logger.error(f"Headers: {headers}")
+                    else:
+                        logger.error(f"Lỗi API ({response.status}): {error_content}")
+                    
                     if response.status == 401:
                         return None
                     if response.status == 429:
@@ -358,11 +367,21 @@ def binance_api_request(url, method="GET", params=None, headers=None):
                     continue
 
         except urllib.error.HTTPError as e:
-            if e.code == 451:
+            error_body = e.read().decode() if e.read() else ""
+            
+            # LOG CHI TIẾT CHO BAD REQUEST (400)
+            if e.code == 400:
+                logger.error(f"❌❌❌ HTTP BAD REQUEST (400) CHI TIẾT: {error_body}")
+                logger.error(f"URL: {url}")
+                logger.error(f"Method: {method}")
+                logger.error(f"Params: {params}")
+                logger.error(f"Headers: {headers}")
+                logger.error(f"Reason: {e.reason}")
+            elif e.code == 451:
                 logger.error("❌ Lỗi 451: Truy cập bị chặn - Kiểm tra VPN/proxy")
                 return None
             else:
-                logger.error(f"Lỗi HTTP ({e.code}): {e.reason}")
+                logger.error(f"Lỗi HTTP ({e.code}): {e.reason} - {error_body}")
 
             if e.code == 401:
                 return None
@@ -379,10 +398,14 @@ def binance_api_request(url, method="GET", params=None, headers=None):
             current_time = time.time()
             if current_time - _LAST_API_ERROR_LOG_TIME > _API_ERROR_LOG_INTERVAL:
                 logger.error(f"Lỗi kết nối API (lần thử {attempt + 1}): {str(e)}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
                 _LAST_API_ERROR_LOG_TIME = current_time
             time.sleep(0.5)
 
-    logger.error(f"Thất bại yêu cầu API sau {max_retries} lần thử")
+    logger.error(f"❌ Thất bại yêu cầu API sau {max_retries} lần thử")
+    logger.error(f"URL cuối cùng: {url}")
+    logger.error(f"Method: {method}")
+    logger.error(f"Params: {params}")
     return None
 
 
@@ -578,6 +601,7 @@ def get_step_size(symbol, api_key, api_secret):
 
 def set_leverage(symbol, lev, api_key, api_secret):
     if not symbol:
+        logger.error("❌ set_leverage: Symbol không hợp lệ")
         return False
     try:
         ts = int(time.time() * 1000)
@@ -588,9 +612,19 @@ def set_leverage(symbol, lev, api_key, api_secret):
         headers = {"X-MBX-APIKEY": api_key}
 
         response = binance_api_request(url, method="POST", headers=headers)
-        return bool(response and "leverage" in response)
+        
+        if response is None:
+            logger.error(f"❌ set_leverage {symbol}: Không có phản hồi từ API")
+            return False
+            
+        if "leverage" in response:
+            logger.info(f"✅ set_leverage {symbol}: Đặt đòn bẩy {lev}x thành công")
+            return True
+        else:
+            logger.error(f"❌ set_leverage {symbol}: Phản hồi không hợp lệ: {response}")
+            return False
     except Exception as e:
-        logger.error(f"Lỗi cài đặt đòn bẩy: {str(e)}")
+        logger.error(f"❌ set_leverage {symbol}: Lỗi: {str(e)}")
         return False
 
 
@@ -605,6 +639,7 @@ def get_balance(api_key, api_secret):
 
         data = binance_api_request(url, headers=headers)
         if not data:
+            logger.error("❌ get_balance: Không lấy được dữ liệu từ API")
             return None
 
         # Tính tổng số dư USDT và USDC (nếu có) để đảm bảo không nhầm thành 0
@@ -727,17 +762,22 @@ def get_margin_safety_info(api_key, api_secret):
 
 def place_order(symbol, side, qty, api_key, api_secret):
     # FIX 3: Chặn đặt lệnh với khối lượng không hợp lệ
-    if not symbol or side not in ["BUY", "SELL"]:
+    if not symbol:
+        logger.error("❌ place_order: Symbol không hợp lệ")
+        return None
+    
+    if side not in ["BUY", "SELL"]:
+        logger.error(f"❌ place_order: Side không hợp lệ: {side}")
         return None
     
     if qty <= 0:
-        logger.error(f"❌ Khối lượng không hợp lệ: {qty}")
+        logger.error(f"❌ place_order: Khối lượng không hợp lệ: {qty}")
         return None
     
     try:
         step_size = get_step_size(symbol, api_key, api_secret)
         if qty < step_size:
-            logger.error(f"❌ Khối lượng {qty} nhỏ hơn step size {step_size}")
+            logger.error(f"❌ place_order: Khối lượng {qty} nhỏ hơn step size {step_size}")
             return None
             
         ts = int(time.time() * 1000)
@@ -748,19 +788,36 @@ def place_order(symbol, side, qty, api_key, api_secret):
             "quantity": qty,
             "timestamp": ts,
         }
+        
+        logger.info(f"📤 place_order: Đang đặt lệnh {side} {symbol} khối lượng {qty}")
+        
         query = urllib.parse.urlencode(params)
         sig = sign(query, api_secret)
         url = f"https://fapi.binance.com/fapi/v1/order?{query}&signature={sig}"
         headers = {"X-MBX-APIKEY": api_key}
 
-        return binance_api_request(url, method="POST", headers=headers)
+        result = binance_api_request(url, method="POST", headers=headers)
+        
+        if result is None:
+            logger.error(f"❌ place_order {symbol}: Không có phản hồi từ API")
+            return None
+            
+        if "orderId" in result:
+            logger.info(f"✅ place_order {symbol}: Đặt lệnh thành công, Order ID: {result['orderId']}")
+            return result
+        else:
+            logger.error(f"❌ place_order {symbol}: Phản hồi không hợp lệ: {result}")
+            return result
+            
     except Exception as e:
-        logger.error(f"Lỗi lệnh: {str(e)}")
+        logger.error(f"❌ place_order {symbol}: Lỗi: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
         return None
 
 
 def cancel_all_orders(symbol, api_key, api_secret):
     if not symbol:
+        logger.error("❌ cancel_all_orders: Symbol không hợp lệ")
         return False
     try:
         ts = int(time.time() * 1000)
@@ -770,10 +827,18 @@ def cancel_all_orders(symbol, api_key, api_secret):
         url = f"https://fapi.binance.com/fapi/v1/allOpenOrders?{query}&signature={sig}"
         headers = {"X-MBX-APIKEY": api_key}
 
-        binance_api_request(url, method="DELETE", headers=headers)
+        logger.info(f"📤 cancel_all_orders: Đang hủy tất cả lệnh {symbol}")
+        
+        result = binance_api_request(url, method="DELETE", headers=headers)
+        
+        if result is None:
+            logger.error(f"❌ cancel_all_orders {symbol}: Không có phản hồi từ API")
+            return False
+            
+        logger.info(f"✅ cancel_all_orders {symbol}: Hủy lệnh thành công")
         return True
     except Exception as e:
-        logger.error(f"Lỗi hủy lệnh: {str(e)}")
+        logger.error(f"❌ cancel_all_orders {symbol}: Lỗi: {str(e)}")
         return False
 
 
@@ -1531,6 +1596,7 @@ class BaseBot:
             except Exception as e:
                 if time.time() - self.last_error_log_time > 10:
                     self.log(f"❌ Lỗi hệ thống: {str(e)}")
+                    self.log(f"Traceback: {traceback.format_exc()}")
                     self.last_error_log_time = time.time()
                 time.sleep(5)
 
@@ -1582,6 +1648,7 @@ class BaseBot:
 
         except Exception as e:
             self.log(f"❌ Lỗi xử lý {symbol}: {str(e)}")
+            self.log(f"Traceback: {traceback.format_exc()}")
             return False
 
     def _process_static_entry(self, symbol, entry_signal):
@@ -2259,11 +2326,13 @@ class BaseBot:
                     else "Không có phản hồi"
                 )
                 self.log(f"❌ {symbol} - Lỗi lệnh: {error_msg}")
+                self.log(f"❌ Chi tiết lỗi lệnh: {result}")
                 self.stop_symbol(symbol)
                 return False
 
         except Exception as e:
             self.log(f"❌ {symbol} - Lỗi mở vị thế: {str(e)}")
+            self.log(f"Traceback: {traceback.format_exc()}")
             self.stop_symbol(symbol)
             return False
 
@@ -2344,11 +2413,13 @@ class BaseBot:
                     else "Không có phản hồi"
                 )
                 self.log(f"❌ {symbol} - Lỗi lệnh đóng: {error_msg}")
+                self.log(f"❌ Chi tiết lỗi đóng: {result}")
                 self.symbol_data[symbol]["close_attempted"] = False
                 return False
 
         except Exception as e:
             self.log(f"❌ {symbol} - Lỗi đóng vị thế: {str(e)}")
+            self.log(f"Traceback: {traceback.format_exc()}")
             self.symbol_data[symbol]["close_attempted"] = False
             return False
 
@@ -3187,6 +3258,7 @@ class BotManager:
 
         except Exception as e:
             self.log(f"❌ Lỗi tạo bot: {str(e)}")
+            self.log(f"Traceback: {traceback.format_exc()}")
             return False
 
         if created_count > 0:
@@ -4242,16 +4314,16 @@ class BotManager:
         elif text == "💰 Số dư":
             try:
                 balance = get_balance(self.api_key, self.api_secret)
-                if balance is None:
+                if balance is not None:
                     send_telegram(
-                        "❌ <b>LỖI KẾT NỐI BINANCE</b>\nKiểm tra API Key và mạng!",
+                        f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDT",
                         chat_id=chat_id,
                         bot_token=self.telegram_bot_token,
                         default_chat_id=self.telegram_chat_id,
                     )
                 else:
                     send_telegram(
-                        f"💰 <b>SỐ DƯ KHẢ DỤNG</b>: {balance:.2f} USDT",
+                        "❌ <b>LỖI KẾT NỐI BINANCE</b>\nKiểm tra API Key và mạng!",
                         chat_id=chat_id,
                         bot_token=self.telegram_bot_token,
                         default_chat_id=self.telegram_chat_id,
