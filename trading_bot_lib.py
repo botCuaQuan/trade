@@ -1353,6 +1353,12 @@ class BaseBot:
         self.reverse_on_sell = reverse_on_sell
 
         # FIX 4: Xử lý TP/SL = 0 (coi là "tắt")
+        # Đảm bảo thuộc tính tp và sl tồn tại
+        if not hasattr(self, 'tp'):
+            self.tp = None
+        if not hasattr(self, 'sl'):
+            self.sl = None
+
         if self.tp == 0:
             self.tp = None
         if self.sl == 0:
