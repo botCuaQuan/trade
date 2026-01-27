@@ -22,10 +22,16 @@ import ssl
 
 _BINANCE_LAST_REQUEST_TIME = 0
 _BINANCE_RATE_LOCK = threading.Lock()
-_BINANCE_MIN_INTERVAL = 0.1
+_BINANCE_MIN_INTERVAL = 0.15  # Tăng khoảng cách request để tránh rate limit
 
 _USDT_CACHE = {"cặp": [], "cập_nhật_cuối": 0}
-_USDT_CACHE_TTL = 30
+_USDT_CACHE_TTL = 60  # Tăng thời gian cache
+
+_VOLUME_CACHE = {"dữ_liệu": [], "cập_nhật_cuối": 0}
+_VOLUME_CACHE_TTL = 30
+
+_PRICE_CACHE = {"dữ_liệu": {}, "cập_nhật_cuối": 0}
+_PRICE_CACHE_TTL = 5
 
 _LEVERAGE_CACHE = {"dữ_liệu": {}, "cập_nhật_cuối": 0}
 _LEVERAGE_CACHE_TTL = 3600
@@ -37,12 +43,18 @@ _EXCHANGE_INFO_CACHE = {"dữ_liệu": None, "cập_nhật_cuối": 0}
 _EXCHANGE_INFO_CACHE_TTL = 3600
 
 _SYMBOL_BLACKLIST = {"BTCUSDT", "ETHUSDT"}
+_HIGH_SPREAD_SYMBOLS = set()  # Các symbol có spread cao
 
 # Biến để kiểm soát log spam
 _LAST_MARGIN_LOG_TIME = 0
 _MARGIN_LOG_INTERVAL = 60
 _LAST_API_ERROR_LOG_TIME = 0
 _API_ERROR_LOG_INTERVAL = 10
+
+# Cấu hình tìm kiếm
+_MIN_VOLUME_USDT = 5000000  # Volume tối thiểu 5M USDT
+_MIN_PRICE = 0.01  # Giá tối thiểu
+_MAX_SPREAD_PERCENT = 0.5  # Spread tối đa 0.5%
 
 
 def setup_logging():
@@ -338,8 +350,9 @@ def get_synchronized_timestamp():
     return int(time.time() * 1000) + offset
 
 
-def binance_api_request(url, method="GET", params=None, headers=None):
-    max_retries = 2
+def binance_api_request(url, method="GET", params=None, headers=None, retry_count=3):
+    """Hàm gọi API với retry và quản lý rate limit tốt hơn"""
+    max_retries = retry_count
     base_url = url
 
     for attempt in range(max_retries):
@@ -365,7 +378,7 @@ def binance_api_request(url, method="GET", params=None, headers=None):
                     url, data=data, headers=headers, method=method
                 )
 
-            with urllib.request.urlopen(req, timeout=15) as response:
+            with urllib.request.urlopen(req, timeout=20) as response:
                 if response.status == 200:
                     return json.loads(response.read().decode())
                 else:
@@ -383,12 +396,14 @@ def binance_api_request(url, method="GET", params=None, headers=None):
                     if response.status == 401:
                         return None
                     if response.status == 429:
-                        sleep_time = 2**attempt
+                        sleep_time = 2**attempt + 1
                         logger.warning(f"⚠️ 429 Quá nhiều yêu cầu, đợi {sleep_time}s")
                         time.sleep(sleep_time)
+                        continue
                     elif response.status >= 500:
-                        time.sleep(0.5)
-                    continue
+                        time.sleep(1)
+                        continue
+                    return None
 
         except urllib.error.HTTPError as e:
             error_body = e.read().decode() if e.read() else ""
@@ -410,12 +425,14 @@ def binance_api_request(url, method="GET", params=None, headers=None):
             if e.code == 401:
                 return None
             if e.code == 429:
-                sleep_time = 2**attempt
+                sleep_time = 2**attempt + 1
                 logger.warning(f"⚠️ HTTP 429 Quá nhiều yêu cầu, đợi {sleep_time}s")
                 time.sleep(sleep_time)
+                continue
             elif e.code >= 500:
-                time.sleep(0.5)
-            continue
+                time.sleep(1)
+                continue
+            return None
 
         except Exception as e:
             global _LAST_API_ERROR_LOG_TIME
@@ -424,7 +441,7 @@ def binance_api_request(url, method="GET", params=None, headers=None):
                 logger.error(f"Lỗi kết nối API (lần thử {attempt + 1}): {str(e)}")
                 logger.error(f"Traceback: {traceback.format_exc()}")
                 _LAST_API_ERROR_LOG_TIME = current_time
-            time.sleep(0.5)
+            time.sleep(1)
 
     logger.error(f"❌ Thất bại yêu cầu API sau {max_retries} lần thử")
     logger.error(f"URL cuối cùng: {url}")
@@ -482,26 +499,48 @@ def get_all_usdt_pairs(limit=50):
         return []
 
 
-def get_top_volume_symbols(limit=20):
-    """Lấy top coin có khối lượng giao dịch cao nhất (USDT)"""
+def get_ticker_24h_data():
+    """Lấy dữ liệu 24h cho tất cả các symbol và cache lại"""
+    global _VOLUME_CACHE
     try:
+        now = time.time()
+        if _VOLUME_CACHE["dữ_liệu"] and (now - _VOLUME_CACHE["cập_nhật_cuối"] < _VOLUME_CACHE_TTL):
+            return _VOLUME_CACHE["dữ_liệu"]
+        
         url = "https://fapi.binance.com/fapi/v1/ticker/24hr"
         data = binance_api_request(url)
         if not data:
             return []
+        
+        _VOLUME_CACHE["dữ_liệu"] = data
+        _VOLUME_CACHE["cập_nhật_cuối"] = now
+        logger.info(f"✅ Đã lấy dữ liệu 24h cho {len(data)} symbol")
+        return data
+    except Exception as e:
+        logger.error(f"❌ Lỗi lấy dữ liệu 24h: {str(e)}")
+        return []
+
+
+def get_top_volume_symbols(limit=20, min_volume_usdt=_MIN_VOLUME_USDT):
+    """Lấy top coin có khối lượng giao dịch cao nhất (USDT) với bộ lọc volume"""
+    try:
+        ticker_data = get_ticker_24h_data()
+        if not ticker_data:
+            return []
 
         volume_data = []
-        for item in data:
+        for item in ticker_data:
             symbol = item.get("symbol", "")
             if symbol.endswith("USDT") and symbol not in _SYMBOL_BLACKLIST:
                 volume = float(item.get("quoteVolume", 0))
-                volume_data.append((symbol, volume))
+                if volume >= min_volume_usdt:
+                    volume_data.append((symbol, volume))
 
         volume_data.sort(key=lambda x: x[1], reverse=True)
 
         top_symbols = [symbol for symbol, _ in volume_data[:limit]]
 
-        logger.info(f"📊 Đã lấy {len(top_symbols)} coin có khối lượng cao nhất (USDT)")
+        logger.info(f"📊 Đã lấy {len(top_symbols)} coin có khối lượng cao nhất (USDT, min {min_volume_usdt:,})")
         return top_symbols
 
     except Exception as e:
@@ -509,40 +548,22 @@ def get_top_volume_symbols(limit=20):
         return []
 
 
-def get_high_volatility_symbols(limit=20, timeframe="5m", lookback=20):
-    """Lấy top coin có biến động cao nhất (USDT)"""
+def get_high_volatility_symbols(limit=20, min_volume_usdt=_MIN_VOLUME_USDT):
+    """Lấy top coin có biến động cao nhất (USDT) dựa trên percent change"""
     try:
-        all_symbols = get_all_usdt_pairs(limit=50)
-        if not all_symbols:
+        ticker_data = get_ticker_24h_data()
+        if not ticker_data:
             return []
 
         volatility_data = []
-
-        for symbol in all_symbols[:30]:
-            try:
-                url = "https://fapi.binance.com/fapi/v1/klines"
-                params = {"symbol": symbol, "interval": timeframe, "limit": lookback}
-                klines = binance_api_request(url, params=params)
-
-                if not klines or len(klines) < lookback:
-                    continue
-
-                price_changes = []
-                for i in range(1, len(klines)):
-                    close_prev = float(klines[i - 1][4])
-                    close_current = float(klines[i][4])
-                    if close_prev > 0:
-                        change = (close_current - close_prev) / close_prev * 100
-                        price_changes.append(change)
-
-                if price_changes:
-                    volatility = np.std(price_changes)
-                    volatility_data.append((symbol, volatility))
-
-                time.sleep(0.5)
-
-            except Exception as e:
-                continue
+        for item in ticker_data:
+            symbol = item.get("symbol", "")
+            if symbol.endswith("USDT") and symbol not in _SYMBOL_BLACKLIST:
+                volume = float(item.get("quoteVolume", 0))
+                price_change = abs(float(item.get("priceChangePercent", 0)))
+                
+                if volume >= min_volume_usdt:
+                    volatility_data.append((symbol, price_change))
 
         volatility_data.sort(key=lambda x: x[1], reverse=True)
 
@@ -554,6 +575,87 @@ def get_high_volatility_symbols(limit=20, timeframe="5m", lookback=20):
     except Exception as e:
         logger.error(f"Lỗi lấy high volatility: {str(e)}")
         return []
+
+
+def get_best_trending_symbols(limit=15, min_volume_usdt=_MIN_VOLUME_USDT):
+    """
+    Lấy coin có xu hướng tốt nhất dựa trên:
+    1. Volume cao
+    2. Biến động vừa phải (2-10%)
+    3. Xu hướng rõ ràng (price change dương/âm mạnh)
+    """
+    try:
+        ticker_data = get_ticker_24h_data()
+        if not ticker_data:
+            return []
+
+        scored_symbols = []
+        for item in ticker_data:
+            symbol = item.get("symbol", "")
+            if symbol.endswith("USDT") and symbol not in _SYMBOL_BLACKLIST:
+                volume = float(item.get("quoteVolume", 0))
+                price_change = float(item.get("priceChangePercent", 0))
+                high_price = float(item.get("highPrice", 0))
+                low_price = float(item.get("lowPrice", 0))
+                
+                # Bỏ qua coin giá quá thấp
+                if high_price < _MIN_PRICE:
+                    continue
+                    
+                # Tính spread
+                if low_price > 0:
+                    spread_percent = ((high_price - low_price) / low_price) * 100
+                else:
+                    spread_percent = 0
+                
+                # Điều kiện lọc
+                if (volume >= min_volume_usdt and 
+                    2 <= abs(price_change) <= 15 and  # Biến động vừa phải
+                    spread_percent <= _MAX_SPREAD_PERCENT):  # Spread không quá cao
+                    
+                    # Tính điểm dựa trên volume và độ mạnh của trend
+                    volume_score = math.log10(volume) / 10
+                    trend_strength = abs(price_change) / 10
+                    total_score = volume_score * 0.6 + trend_strength * 0.4
+                    
+                    scored_symbols.append((symbol, total_score, price_change))
+
+        scored_symbols.sort(key=lambda x: x[1], reverse=True)
+
+        top_symbols = [symbol for symbol, score, change in scored_symbols[:limit]]
+
+        if top_symbols:
+            logger.info(f"🎯 Đã lấy {len(top_symbols)} coin có xu hướng tốt nhất")
+            
+        return top_symbols
+
+    except Exception as e:
+        logger.error(f"Lỗi lấy trending symbols: {str(e)}")
+        return []
+
+
+def get_price_with_cache(symbol):
+    """Lấy giá với cache để giảm API call"""
+    global _PRICE_CACHE
+    try:
+        symbol = symbol.upper()
+        now = time.time()
+        
+        if (symbol in _PRICE_CACHE["dữ_liệu"] and 
+            now - _PRICE_CACHE["cập_nhật_cuối"] < _PRICE_CACHE_TTL):
+            return _PRICE_CACHE["dữ_liệu"][symbol]
+        
+        url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol}"
+        data = binance_api_request(url)
+        if data and "price" in data:
+            price = float(data["price"])
+            _PRICE_CACHE["dữ_liệu"][symbol] = price
+            _PRICE_CACHE["cập_nhật_cuối"] = now
+            return price
+        return 0
+    except Exception as e:
+        logger.error(f"Lỗi giá {symbol}: {str(e)}")
+        return 0
 
 
 def get_exchange_info():
@@ -906,16 +1008,7 @@ def cancel_all_orders(symbol, api_key, api_secret):
 def get_current_price(symbol):
     if not symbol:
         return 0
-    try:
-        url = f"https://fapi.binance.com/fapi/v1/ticker/price?symbol={symbol.upper()}"
-        data = binance_api_request(url)
-        if data and "price" in data:
-            price = float(data["price"])
-            return price if price > 0 else 0
-        return 0
-    except Exception as e:
-        logger.error(f"Lỗi giá {symbol}: {str(e)}")
-        return 0
+    return get_price_with_cache(symbol)
 
 
 def get_positions(symbol=None, api_key=None, api_secret=None):
@@ -1062,12 +1155,15 @@ class SmartCoinFinder:
         self.api_key = api_key
         self.api_secret = api_secret
         self.last_scan_time = 0
-        self.scan_cooldown = 20  # Tăng cooldown để giảm spam API
+        self.scan_cooldown = 30  # Tăng cooldown để giảm spam API
         self.analysis_cache = {}
         self.cache_ttl = 30
         self.last_positions_fetch = 0
         self.cached_positions = set()
-        self.positions_cache_ttl = 10
+        self.positions_cache_ttl = 15
+        self.last_ticker_fetch = 0
+        self.cached_ticker_data = []
+        self.ticker_cache_ttl = 30
 
     def _get_all_positions(self):
         """Lấy tất cả vị thế và cache trong thời gian ngắn"""
@@ -1089,6 +1185,22 @@ class SmartCoinFinder:
         except Exception as e:
             logger.error(f"Lỗi lấy vị thế: {str(e)}")
             return set()
+
+    def _get_ticker_data(self):
+        """Lấy dữ liệu ticker 24h với cache"""
+        current_time = time.time()
+        if (self.cached_ticker_data and 
+            current_time - self.last_ticker_fetch < self.ticker_cache_ttl):
+            return self.cached_ticker_data
+        
+        try:
+            data = get_ticker_24h_data()
+            self.cached_ticker_data = data
+            self.last_ticker_fetch = current_time
+            return data
+        except Exception as e:
+            logger.error(f"Lỗi lấy ticker data: {str(e)}")
+            return []
 
     def get_symbol_leverage(self, symbol):
         return get_max_leverage(symbol, self.api_key, self.api_secret)
@@ -1185,7 +1297,31 @@ class SmartCoinFinder:
             return None
 
     def get_entry_signal(self, symbol):
-        return random.choice(["BUY", "SELL", None])
+        """Lấy tín hiệu vào lệnh với phân tích nâng cao"""
+        try:
+            # Kiểm tra RSI signal
+            rsi_signal = self.get_rsi_signal(symbol, volume_threshold=15)
+            
+            if rsi_signal:
+                # Kiểm tra thêm trend từ dữ liệu 24h
+                ticker_data = self._get_ticker_data()
+                for item in ticker_data:
+                    if item.get("symbol") == symbol:
+                        price_change = float(item.get("priceChangePercent", 0))
+                        volume = float(item.get("quoteVolume", 0))
+                        
+                        # Nếu volume đủ lớn và trend mạnh
+                        if volume >= _MIN_VOLUME_USDT:
+                            if rsi_signal == "BUY" and price_change > 2:
+                                return "BUY"
+                            elif rsi_signal == "SELL" and price_change < -2:
+                                return "SELL"
+                return rsi_signal
+            
+            return random.choice(["BUY", "SELL", None])
+        except Exception as e:
+            logger.error(f"Lỗi get_entry_signal {symbol}: {str(e)}")
+            return random.choice(["BUY", "SELL", None])
 
     def get_exit_signal(self, symbol):
         return self.get_rsi_signal(symbol, volume_threshold=100)
@@ -1200,19 +1336,19 @@ class SmartCoinFinder:
             return True
 
     def find_best_coin_by_volume(self, excluded_coins=None, required_leverage=10):
-        """Tìm coin tốt nhất theo khối lượng giao dịch"""
+        """Tìm coin tốt nhất theo khối lượng giao dịch với bộ lọc nâng cao"""
         try:
             now = time.time()
             if now - self.last_scan_time < self.scan_cooldown:
                 return None
             self.last_scan_time = now
 
-            # FIX 5: Giảm số coin scan
-            top_coins = get_top_volume_symbols(limit=20)
+            # Lấy coin có volume cao với bộ lọc
+            top_coins = get_top_volume_symbols(limit=25, min_volume_usdt=_MIN_VOLUME_USDT)
             if not top_coins:
                 return None
 
-            # FIX 5.1: Lấy tất cả vị thế một lần
+            # Lấy tất cả vị thế một lần
             positions_set = self._get_all_positions()
 
             valid_coins = []
@@ -1224,6 +1360,10 @@ class SmartCoinFinder:
 
                 max_lev = self.get_symbol_leverage(symbol)
                 if max_lev < required_leverage:
+                    continue
+
+                # Kiểm tra spread và điều kiện khác
+                if not self._check_symbol_conditions(symbol):
                     continue
 
                 entry_signal = self.get_entry_signal(symbol)
@@ -1249,19 +1389,17 @@ class SmartCoinFinder:
             return None
 
     def find_best_coin_by_volatility(self, excluded_coins=None, required_leverage=10):
-        """Tìm coin tốt nhất theo biến động giá"""
+        """Tìm coin tốt nhất theo biến động giá với bộ lọc"""
         try:
             now = time.time()
             if now - self.last_scan_time < self.scan_cooldown:
                 return None
             self.last_scan_time = now
 
-            # FIX 5: Giảm số coin scan
-            top_coins = get_high_volatility_symbols(limit=20)
+            top_coins = get_high_volatility_symbols(limit=25, min_volume_usdt=_MIN_VOLUME_USDT)
             if not top_coins:
                 return None
 
-            # FIX 5.1: Lấy tất cả vị thế một lần
             positions_set = self._get_all_positions()
 
             valid_coins = []
@@ -1273,6 +1411,10 @@ class SmartCoinFinder:
 
                 max_lev = self.get_symbol_leverage(symbol)
                 if max_lev < required_leverage:
+                    continue
+
+                # Kiểm tra spread và điều kiện khác
+                if not self._check_symbol_conditions(symbol):
                     continue
 
                 entry_signal = self.get_entry_signal(symbol)
@@ -1297,23 +1439,23 @@ class SmartCoinFinder:
             logger.error(f"❌ Lỗi tìm coin theo biến động: {str(e)}")
             return None
 
-    def find_best_coin_any_signal(self, excluded_coins=None, required_leverage=10):
+    def find_best_trending_coin(self, excluded_coins=None, required_leverage=10):
+        """Tìm coin có xu hướng tốt nhất (phương pháp tối ưu)"""
         try:
             now = time.time()
             if now - self.last_scan_time < self.scan_cooldown:
                 return None
             self.last_scan_time = now
 
-            # FIX 5: Giảm số coin scan
-            all_symbols = get_all_usdt_pairs(limit=20)
-            if not all_symbols:
+            # Sử dụng phương pháp tìm kiếm xu hướng tốt nhất
+            trending_coins = get_best_trending_symbols(limit=20, min_volume_usdt=_MIN_VOLUME_USDT)
+            if not trending_coins:
                 return None
 
-            # FIX 5.1: Lấy tất cả vị thế một lần
             positions_set = self._get_all_positions()
 
-            valid_symbols = []
-            for symbol in all_symbols:
+            valid_coins = []
+            for symbol in trending_coins:
                 if excluded_coins and symbol in excluded_coins:
                     continue
                 if symbol in positions_set:
@@ -1323,26 +1465,76 @@ class SmartCoinFinder:
                 if max_lev < required_leverage:
                     continue
 
-                time.sleep(1)
+                # Kiểm tra spread và điều kiện khác
+                if not self._check_symbol_conditions(symbol):
+                    continue
+
                 entry_signal = self.get_entry_signal(symbol)
                 if entry_signal in ["BUY", "SELL"]:
-                    valid_symbols.append((symbol, entry_signal))
+                    valid_coins.append((symbol, entry_signal))
                     logger.info(
-                        f"✅ Đã tìm thấy coin có tín hiệu: {symbol} - {entry_signal}"
+                        f"✅ Đã tìm thấy coin có xu hướng tốt: {symbol} - {entry_signal}"
                     )
 
-            if not valid_symbols:
+            if not valid_coins:
                 return None
-            selected_symbol, _ = random.choice(valid_symbols)
 
-            if selected_symbol in positions_set:
-                return None
-            logger.info(f"🎯 Đã chọn coin: {selected_symbol}")
-            return selected_symbol
+            # Ưu tiên coin có tín hiệu rõ ràng
+            if valid_coins:
+                selected_symbol, _ = random.choice(valid_coins)
+                
+                if selected_symbol in positions_set:
+                    return None
+
+                logger.info(f"🎯 Đã chọn coin theo xu hướng: {selected_symbol}")
+                return selected_symbol
+
+            return None
 
         except Exception as e:
-            logger.error(f"❌ Lỗi tìm coin: {str(e)}")
+            logger.error(f"❌ Lỗi tìm coin theo xu hướng: {str(e)}")
             return None
+
+    def _check_symbol_conditions(self, symbol):
+        """Kiểm tra các điều kiện bổ sung cho symbol"""
+        try:
+            # Kiểm tra giá
+            price = get_price_with_cache(symbol)
+            if price < _MIN_PRICE:
+                return False
+                
+            # Kiểm tra spread từ dữ liệu 24h
+            ticker_data = self._get_ticker_data()
+            for item in ticker_data:
+                if item.get("symbol") == symbol:
+                    high_price = float(item.get("highPrice", 0))
+                    low_price = float(item.get("lowPrice", 0))
+                    
+                    if low_price > 0:
+                        spread_percent = ((high_price - low_price) / low_price) * 100
+                        if spread_percent > _MAX_SPREAD_PERCENT:
+                            return False
+                    break
+                    
+            return True
+        except Exception as e:
+            logger.error(f"Lỗi kiểm tra điều kiện symbol {symbol}: {str(e)}")
+            return False
+
+    def find_best_coin_any_signal(self, excluded_coins=None, required_leverage=10):
+        """Phương pháp tìm kiếm tổng hợp - sử dụng phương pháp tốt nhất"""
+        # Ưu tiên tìm theo xu hướng trước
+        coin = self.find_best_trending_coin(excluded_coins, required_leverage)
+        if coin:
+            return coin
+            
+        # Nếu không tìm thấy, thử theo volume
+        coin = self.find_best_coin_by_volume(excluded_coins, required_leverage)
+        if coin:
+            return coin
+            
+        # Cuối cùng thử theo volatility
+        return self.find_best_coin_by_volatility(excluded_coins, required_leverage)
 
 
 class WebSocketManager:
@@ -2054,6 +2246,7 @@ class BaseBot:
         try:
             active_coins = self.coin_manager.get_active_coins()
 
+            # Sử dụng phương pháp tìm kiếm tối ưu nhất
             if self.dynamic_strategy == "volume":
                 new_symbol = self.coin_finder.find_best_coin_by_volume(
                     excluded_coins=active_coins, required_leverage=self.lev
@@ -2063,7 +2256,8 @@ class BaseBot:
                     excluded_coins=active_coins, required_leverage=self.lev
                 )
             else:
-                new_symbol = self.coin_finder.find_best_coin_any_signal(
+                # Sử dụng phương pháp tìm kiếm tổng hợp tốt nhất
+                new_symbol = self.coin_finder.find_best_trending_coin(
                     excluded_coins=active_coins, required_leverage=self.lev
                 )
 
