@@ -1,5 +1,3 @@
-[file name]: trading_bot_lib.py
-[file content begin]
 import json
 import hmac
 import hashlib
@@ -3130,4 +3128,3 @@ class BotManager:
 
 
 ssl._create_default_https_context = ssl._create_unverified_context
-[file content end]
